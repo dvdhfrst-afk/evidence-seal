@@ -103,6 +103,11 @@ at least keep a copy: the seal proves a match, it cannot rebuild a file.
 python -m evidence_seal verify examples/my-work-manifest.txt
 ```
 
+The checks look like this, and the last line tells you the result. The real output also has a section
+at the top about the manifest, then what the token says and what no run can check. The manifest's hash
+and the time will differ, because the `created` line and the moment of stamping differ. Two long values
+are shortened here with `...`.
+
 ```text
 FILES
   [PASS] Files match the manifest: 4 of 4 listed files unchanged, 0 changed, 0 missing, 0 added
