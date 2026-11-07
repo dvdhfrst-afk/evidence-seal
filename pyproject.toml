@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evidence-seal"
+version = "1.0.0"
+description = "Seal a folder with a hash manifest and an RFC 3161 timestamp, and prove it later without trusting this tool."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+evidence-seal = "evidence_seal.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["evidence_seal*"]

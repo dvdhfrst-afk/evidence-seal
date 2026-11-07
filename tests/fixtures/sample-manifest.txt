@@ -1,0 +1,12 @@
+evidence-seal manifest v1
+purpose: Synthetic test folder for the evidence-seal test suite
+created: 2026-01-15
+folder: sample-folder
+algorithm: sha256
+files: 4
+total-bytes: 373
+
+40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880  256  data/blob.bin
+5ac55f10a739d5994eb34142bfbcd0b69aaf730cb8cb32282d8628162b93f56c  30  data/name with spaces.txt
+1f049302d98c1c4a1dcac2bc95e86b75d52c05be57b33544f7d32e41e2235385  38  notes.txt
+704e5583c9401d0963efb9e7f6c530c186ee547ef00678e9f95fe679afe926ee  49  windows-endings.txt
