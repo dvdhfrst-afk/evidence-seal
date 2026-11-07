@@ -147,10 +147,28 @@ with the reason, even when the arithmetic works out.
 ## Commands
 
 **`seal FOLDER --purpose TEXT`** hashes raw bytes and never normalizes line endings, because that
-would break the proof. Excludes have two forms, and `--exclude` can repeat:
+would break the proof. `--exclude` and `--exclude-from` can repeat, and the patterns work like this:
 
-- With no slash, the pattern matches a name at any depth: `--exclude .git`, `--exclude "*.tmp"`.
-- With a slash, it matches the whole relative path: `--exclude build/out`, `--exclude /top-only.txt`.
+- With no slash, a pattern matches a name at any depth: `--exclude .git`, `--exclude "*.tmp"`.
+- With a slash, it matches from the top of the folder: `--exclude build/out`, `--exclude /top-only.txt`.
+- `*` and `?` stop at a slash, and `**` stands for any number of folders: `--exclude "src/**/*.log"`.
+- A trailing slash limits a pattern to folders: `--exclude cache/`.
+- A leading `!` puts back what an earlier pattern left out: `--exclude build --exclude "!build/manual.txt"`.
+  A name that really starts with `!` is written `/!name` or `**/!name`.
+
+A pattern on a folder applies to everything inside it, and when several apply the last one wins, so
+order matters. The patterns are recorded in the manifest in that order, and `verify` applies them
+the same way. `--exclude-from FILE` reads one pattern per line, with blank lines and `#` comments
+ignored, at its place in the order. Matching is case sensitive on every system. Seal warns about a
+pattern that matched nothing, since it is often a typing mistake.
+
+A timestamp cannot be taken back, so look before you stamp. `--dry-run` opens no file and writes
+nothing. It lists what would be sealed with sizes, and what would be left out by which pattern from
+which file and line, and exits non-zero if a real run would fail. It needs no `--purpose`.
+
+```bash
+python -m evidence_seal seal ../my-work --dry-run --exclude .git --exclude-from my-excludes.txt
+```
 
 Links are listed by name and never followed. Their targets are not covered, and the output says so.
 If a file cannot be read the seal stops, so a seal can never quietly miss one. `--out` chooses the
@@ -171,7 +189,8 @@ being checked, exactly its own companions (`.tsr`, `.tst`, `.tsq`, `.ca.crt`, `.
 `.report.html`) and the files named in the command are not compared, and the output lists them.
 
 - `--allow-added`: new files alone do not fail the file check. They are still listed.
-- `--exclude PATTERN`: do not report new files matching this. Files in the manifest are always checked.
+- `--exclude PATTERN`, `--exclude-from FILE`: do not report new files matching this. Files in the manifest
+  are always checked.
 - `--skip-files`: check the token only. The result can then be at best INCOMPLETE.
 - `--ca FILE`: trust this root certificate instead of the built-in fingerprints.
 - `--untrusted FILE`: extra certificates to build the chain from, for tokens that do not carry them.

@@ -6,11 +6,13 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from evidence_seal import hashes, manifest, scan, sealing
-from evidence_seal.errors import SealError
+from evidence_seal.errors import SealError, UsageError
 from tests.support import (
     HANDMADE_MANIFEST,
     LOCAL,
@@ -51,9 +53,78 @@ class ExcludeRules(unittest.TestCase):
         self.assertFalse(scan.Excludes(["*.TMP"]).matches("a.tmp"))
 
     def test_backslashes_and_trailing_slashes_are_normalized(self):
-        self.assertTrue(scan.Excludes(["node_modules/"]).matches("a/node_modules"))
+        self.assertTrue(scan.Excludes(["node_modules/"]).matches("a/node_modules", is_dir=True))
         self.assertTrue(scan.Excludes(["a\\b"]).matches("a/b"))
         self.assertEqual(scan.Excludes(["/", ""]).patterns, [])
+
+
+    def test_trailing_slash_means_folders_only(self):
+        rules = scan.Excludes(["cache/"])
+        self.assertFalse(rules.matches("cache"))
+        self.assertTrue(rules.matches("cache", is_dir=True))
+        self.assertTrue(rules.matches("a/cache/file.txt"))
+
+    def test_a_rule_on_a_folder_covers_what_is_inside(self):
+        rules = scan.Excludes(["build", "lib/out"])
+        self.assertTrue(rules.matches("build/a/b.txt"))
+        self.assertTrue(rules.matches("x/build/b.txt"))
+        self.assertTrue(rules.matches("lib/out/b.txt"))
+        self.assertFalse(rules.matches("x/lib/out/b.txt"))
+
+    def test_wildcards_stop_at_slashes_and_double_star_does_not(self):
+        rules = scan.Excludes(["src/*.log"])
+        self.assertTrue(rules.matches("src/a.log"))
+        self.assertFalse(rules.matches("src/deep/a.log"))
+        rules = scan.Excludes(["src/**/*.log"])
+        self.assertTrue(rules.matches("src/a.log"))
+        self.assertTrue(rules.matches("src/deep/er/a.log"))
+        self.assertFalse(rules.matches("other/a.log"))
+        self.assertTrue(scan.Excludes(["**/out/*.o"]).matches("out/a.o"))
+        self.assertTrue(scan.Excludes(["a/**/b/**/c"]).matches("a/x/b/b/y/c"))
+        self.assertFalse(scan.Excludes(["a/**/b/**/c"]).matches("a/x/c"))
+
+    def test_last_rule_that_applies_wins(self):
+        rules = scan.Excludes(["*.log", "!keep.log"])
+        self.assertTrue(rules.matches("a.log"))
+        self.assertFalse(rules.matches("sub/keep.log"))
+        rules = scan.Excludes(["!keep.log", "*.log"])
+        self.assertTrue(rules.matches("keep.log"))
+        rules = scan.Excludes(["build", "!build/keep.txt"])
+        self.assertTrue(rules.matches("build/other.txt"))
+        self.assertFalse(rules.matches("build/keep.txt"))
+        rules = scan.Excludes(["build", "!build/keep/", "*.tmp"])
+        self.assertFalse(rules.matches("build/keep/a.txt"))
+        self.assertTrue(rules.matches("build/keep/a.tmp"))
+        rules = scan.Excludes(["*.log", "!keep.log", "logs"])
+        self.assertTrue(rules.matches("logs/keep.log"))
+
+    def test_folder_is_skipped_only_when_nothing_can_be_put_back(self):
+        self.assertTrue(scan.Excludes(["build"]).can_skip_folder("build"))
+        self.assertFalse(scan.Excludes(["build", "!build/keep.txt"]).can_skip_folder("build"))
+        self.assertTrue(scan.Excludes(["!x", "build"]).can_skip_folder("build"))
+        self.assertFalse(scan.Excludes(["other"]).can_skip_folder("build"))
+
+    def test_name_starting_with_an_exclamation_mark(self):
+        self.assertTrue(scan.Excludes(["/!odd.txt"]).matches("!odd.txt"))
+        self.assertTrue(scan.Excludes(["**/!odd.txt"]).matches("a/!odd.txt"))
+
+    def test_long_wildcard_patterns_stay_fast(self):
+        rules = scan.Excludes(["/".join(["**"] * 25 + ["*a*a*a*a*a*a*a*b"])])
+        self.assertFalse(rules.matches("/".join(["a" * 40] * 25)))
+
+    def test_rule_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "rules.txt"
+            path.write_bytes(b"\xef\xbb\xbf# build output\r\n\r\n*.tmp\r\n  build/  \r\n!build/keep.txt\r\n")
+            self.assertEqual(
+                scan.read_exclude_file(path),
+                [("*.tmp", "rules.txt line 3"), ("build/", "rules.txt line 4"), ("!build/keep.txt", "rules.txt line 5")],
+            )
+            path.write_bytes(b"\xff\xfe")
+            with self.assertRaises(UsageError):
+                scan.read_exclude_file(path)
+            with self.assertRaises(UsageError):
+                scan.read_exclude_file(Path(temp) / "none.txt")
 
 
 class Seal(TempFolderTestCase):
@@ -212,6 +283,136 @@ class Seal(TempFolderTestCase):
         digest, size = scan.hash_file(path, hashes.SHA256)
         self.assertEqual(size, scan.CHUNK * 2 + 5)
         self.assertEqual(digest, hashlib.sha256(b"x" * (scan.CHUNK * 2 + 5)).hexdigest())
+
+
+class RuleOrderInSeals(TempFolderTestCase):
+    def folder(self):
+        self.write("work/keep.txt", b"keep\n")
+        self.write("work/build/app.bin", b"binary\n")
+        self.write("work/build/manual.txt", b"manual\n")
+        self.write("work/a.log", b"log\n")
+        self.write("work/important.log", b"log\n")
+        return self.temp / "work"
+
+    def seal(self, *rules):
+        out = self.temp / "m.txt"
+        code, text, err = run_cli("seal", self.folder(), "--purpose", "p", "--out", out, "--force", *rules)
+        self.assertEqual(code, 0, err)
+        return out, manifest.read_manifest(out), text
+
+    def test_rules_are_recorded_in_order_and_verify_applies_them_the_same_way(self):
+        rules = ("--exclude", "build", "--exclude", "!build/manual.txt", "--exclude", "*.log", "--exclude", "!important.log")
+        out, parsed, _ = self.seal(*rules)
+        self.assertEqual(parsed.excludes, ["build", "!build/manual.txt", "*.log", "!important.log"])
+        self.assertEqual(sorted(entry.path for entry in parsed.entries), ["build/manual.txt", "important.log", "keep.txt"])
+        code, text, _ = run_cli("verify", out, "--json")
+        data = json.loads(text)
+        self.assertEqual(data["files"]["status"], "pass")
+        self.write("work/build/new.bin")
+        self.write("work/other.log")
+        _, text, _ = run_cli("verify", out, "--json")
+        self.assertEqual(json.loads(text)["differences"]["added"], [])
+        self.write("work/build/manual.txt", b"edited\n")
+        code, text, _ = run_cli("verify", out, "--json")
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(text)["differences"]["changed"], ["build/manual.txt"])
+
+    def test_options_and_files_keep_their_order(self):
+        rules_file = self.write("rules.txt", b"# comment\nbuild\n")
+        _, parsed, _ = self.seal("--exclude", "!build/manual.txt", "--exclude-from", rules_file)
+        self.assertNotIn("build/manual.txt", [entry.path for entry in parsed.entries])
+        _, parsed, _ = self.seal("--exclude-from", rules_file, "--exclude", "!build/manual.txt")
+        self.assertIn("build/manual.txt", [entry.path for entry in parsed.entries])
+        self.assertEqual(parsed.excludes, ["build", "!build/manual.txt"])
+
+    def test_own_files_cannot_be_put_back(self):
+        folder = self.folder()
+        out = folder / "seal.txt"
+        run_cli("seal", folder, "--purpose", "p", "--out", out, "--exclude", "!seal.*")
+        self.assertNotIn("seal.txt", [entry.path for entry in manifest.read_manifest(out).entries])
+
+    def test_verify_exclude_covers_what_is_inside_a_new_folder(self):
+        out, _, _ = self.seal()
+        self.write("work/cache/deep/new.txt")
+        _, text, _ = run_cli("verify", out, "--json", "--exclude", "cache")
+        self.assertEqual(json.loads(text)["differences"]["added"], [])
+        rules_file = self.write("rules.txt", b"other\n")
+        _, text, _ = run_cli("verify", out, "--json", "--exclude-from", rules_file)
+        self.assertEqual(json.loads(text)["differences"]["added"], ["cache/deep/new.txt"])
+
+    def test_pattern_that_matched_nothing_is_pointed_out(self):
+        _, _, text = self.seal("--exclude", "*.lgo", "--exclude", "*.log")
+        self.assertIn("matched nothing", text)
+        self.assertIn("*.lgo", text)
+        self.assertNotIn("*.log (", text)
+
+    def test_empty_patterns_and_missing_files_are_usage_errors(self):
+        folder = self.folder()
+        for arguments in (("--exclude", "!"), ("--exclude", "/"), ("--exclude-from", self.temp / "none.txt")):
+            code, _, err = run_cli("seal", folder, "--purpose", "p", *arguments)
+            self.assertEqual(code, 2, arguments)
+            self.assertIn("error:", err)
+
+
+class DryRun(TempFolderTestCase):
+    def folder(self):
+        self.write("work/a.txt", b"12345")
+        self.write("work/sub/b.txt", b"123")
+        self.write("work/x.tmp")
+        self.write("work/.git/config")
+        return self.temp / "work"
+
+    def test_shows_what_would_happen_and_writes_nothing(self):
+        folder = self.folder()
+        rules = self.write("rules.txt", b"# junk\n*.tmp\n")
+        before = sorted(path.name for path in self.temp.iterdir())
+        code, out, _ = run_cli(
+            "seal", folder, "--dry-run", "--exclude", ".git", "--exclude-from", rules, "--exclude", "*.nope"
+        )
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(path.name for path in self.temp.iterdir()), before)
+        self.assertIn("Would seal 2 files, 8 bytes", out)
+        self.assertIn("sub/b.txt", out)
+        self.assertIn(".git/  by .git (--exclude)", out)
+        self.assertIn("x.tmp  by *.tmp (rules.txt line 2)", out)
+        self.assertIn("*.nope (--exclude)", out)
+
+    def test_opens_no_file(self):
+        folder = self.folder()
+        with mock.patch("evidence_seal.scan.hash_file", side_effect=AssertionError("a file was hashed")):
+            self.assertEqual(run_cli("seal", folder, "--dry-run")[0], 0)
+
+    def test_agrees_with_the_real_seal(self):
+        folder = self.folder()
+        out = self.temp / "m.txt"
+        preview = sealing.preview_folder(folder, [".git", "!.git/config", "*.tmp"], out)
+        sealing.seal_folder(folder, "p", [".git", "!.git/config", "*.tmp"], out)
+        parsed = manifest.read_manifest(out)
+        self.assertEqual([path for path, _ in preview.files], [entry.path for entry in parsed.entries])
+        self.assertEqual(preview.total_bytes, parsed.total_bytes)
+        self.assertEqual([size for _, size in preview.files], [entry.size for entry in parsed.entries])
+
+    def test_existing_manifest_is_mentioned_not_fatal(self):
+        folder = self.folder()
+        out = self.write("m.txt", b"precious")
+        code, text, _ = run_cli("seal", folder, "--dry-run", "--out", out)
+        self.assertEqual(code, 0)
+        self.assertIn("already exists", text)
+        self.assertEqual(out.read_bytes(), b"precious")
+
+    def test_folder_that_would_fail_exits_non_zero(self):
+        (self.temp / "empty").mkdir()
+        self.assertEqual(run_cli("seal", self.temp / "empty", "--dry-run")[0], 1)
+        self.assertEqual(run_cli("seal", self.temp / "none", "--dry-run")[0], 2)
+        with mock.patch("os.scandir", side_effect=PermissionError(13, "Permission denied")):
+            code, text, _ = run_cli("seal", self.folder(), "--dry-run")
+        self.assertEqual(code, 1)
+        self.assertIn("Permission denied", text)
+
+    def test_real_run_still_needs_a_purpose(self):
+        code, _, err = run_cli("seal", self.folder())
+        self.assertEqual(code, 2)
+        self.assertIn("--purpose", err)
 
 
 class VerifyFiles(TempFolderTestCase):

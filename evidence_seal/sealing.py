@@ -5,10 +5,10 @@ from __future__ import annotations
 import glob
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from . import hashes, manifest, scan
 from .errors import ManifestError, SealError, UsageError
@@ -18,6 +18,7 @@ QUERY_SUFFIX = ".tsq"
 ROOT_SUFFIX = ".ca.crt"
 REPORT_TEXT_SUFFIX = ".report.txt"
 REPORT_HTML_SUFFIX = ".report.html"
+OWN_FILES = "the manifest's own files"
 COMPANION_SUFFIXES = (TOKEN_SUFFIX, QUERY_SUFFIX, ROOT_SUFFIX, REPORT_TEXT_SUFFIX, REPORT_HTML_SUFFIX)
 
 
@@ -30,6 +31,23 @@ class SealResult:
     special: List[str]
     excluded: List[str]
     excludes: List[str]
+    unmatched: List[scan.ExcludeRule] = field(default_factory=list)
+
+
+@dataclass
+class SealPreview:
+    """What a seal would cover, with no file opened and nothing written."""
+
+    folder: Path
+    manifest_path: Path
+    manifest_exists: bool
+    files: List[Tuple[str, int]]
+    total_bytes: int
+    links: List[str]
+    special: List[str]
+    left_out: List[Tuple[str, scan.ExcludeRule]]
+    unmatched: List[scan.ExcludeRule]
+    errors: List[Tuple[str, str]]
 
 
 def normalize_created(value: Optional[str], now: Optional[datetime] = None) -> str:
@@ -75,35 +93,78 @@ def write_new_file(path: Path, data: bytes, force: bool = False) -> None:
         raise ManifestError(f"cannot write {path}: {exc.strerror or exc}") from None
 
 
-def _sidecar_excludes(folder: Path, manifest_path: Path) -> List[str]:
+def _sidecar_excludes(folder: Path, manifest_path: Path) -> List[Tuple[str, str]]:
     """If the manifest lives inside the folder, it and its companions are not part of the seal."""
     try:
         relative = manifest_path.relative_to(folder)
     except ValueError:
         return []
     names = [relative] + [relative.with_suffix(suffix) for suffix in COMPANION_SUFFIXES]
-    return [f"/{glob.escape(name.as_posix())}" for name in names]
+    return [(f"/{glob.escape(name.as_posix())}", OWN_FILES) for name in names]
+
+
+def _your_unmatched(rules: scan.Excludes) -> List[scan.ExcludeRule]:
+    return [rule for rule in rules.unmatched() if rule.source != OWN_FILES]
+
+
+def _resolve_paths(
+    folder: Path, excludes: Sequence[scan.ExcludeItem], out: Optional[Path], created_text: str
+) -> Tuple[Path, Path, scan.Excludes]:
+    folder = Path(folder).resolve()
+    if not folder.is_dir():
+        raise UsageError(f"{folder} is not a folder")
+    manifest_path = Path(out).resolve() if out else default_manifest_path(folder, created_text)
+    return folder, manifest_path, scan.Excludes(list(excludes) + _sidecar_excludes(folder, manifest_path))
+
+
+def preview_folder(
+    folder: Path,
+    excludes: Sequence[scan.ExcludeItem] = (),
+    out: Optional[Path] = None,
+    created: Optional[str] = None,
+) -> SealPreview:
+    folder, manifest_path, rules = _resolve_paths(folder, excludes, out, normalize_created(created))
+    walked = scan.walk(folder, rules)
+    files: List[Tuple[str, int]] = []
+    errors = list(walked.errors)
+    for relative in sorted(walked.files, key=scan.sort_key):
+        try:
+            files.append((relative, walked.files[relative].stat().st_size))
+        except OSError as exc:
+            errors.append((relative, exc.strerror or str(exc)))
+    left_out = []
+    for relative in walked.excluded:
+        is_folder = relative in walked.excluded_folders
+        rule = rules.deciding_rule(relative, is_folder)
+        left_out.append((relative + "/" if is_folder else relative, rule))
+    return SealPreview(
+        folder,
+        manifest_path,
+        manifest_path.exists(),
+        files,
+        sum(size for _, size in files),
+        walked.links,
+        walked.special,
+        left_out,
+        _your_unmatched(rules),
+        errors,
+    )
 
 
 def seal_folder(
     folder: Path,
     purpose: str,
-    excludes: Sequence[str] = (),
+    excludes: Sequence[scan.ExcludeItem] = (),
     out: Optional[Path] = None,
     created: Optional[str] = None,
     force: bool = False,
 ) -> SealResult:
-    folder = Path(folder).resolve()
-    if not folder.is_dir():
-        raise UsageError(f"{folder} is not a folder")
     if not purpose.strip():
         raise UsageError("--purpose must say why this seal is being made")
     created_text = normalize_created(created)
-    manifest_path = Path(out).resolve() if out else default_manifest_path(folder, created_text)
+    folder, manifest_path, rules = _resolve_paths(folder, excludes, out, created_text)
     if manifest_path.exists() and not force:
         raise ManifestError(f"{manifest_path} already exists; use --force to replace it, or choose another name")
-    patterns = list(excludes) + _sidecar_excludes(folder, manifest_path)
-    rules = scan.Excludes(patterns)
     walked = scan.walk(folder, rules)
     scan.require_clean_walk(walked)
     if not walked.files:
@@ -127,6 +188,7 @@ def seal_folder(
         walked.special,
         walked.excluded,
         rules.patterns,
+        _your_unmatched(rules),
     )
 
 

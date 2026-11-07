@@ -35,7 +35,7 @@ class VerifyOptions:
     ca_files: Sequence[Path] = ()
     untrusted_files: Sequence[Path] = ()
     query_path: Optional[Path] = None
-    excludes: Sequence[str] = ()
+    excludes: Sequence[scan.ExcludeItem] = ()
     allow_added: bool = False
     skip_files: bool = False
     cross_check: bool = False
@@ -85,7 +85,7 @@ def _relative_entry_path(entry: Entry, folder: Path) -> Optional[str]:
 def compare_folder(
     data: Manifest,
     folder: Path,
-    excludes: Sequence[str] = (),
+    excludes: Sequence[scan.ExcludeItem] = (),
     allow_added: bool = False,
     own_files: Sequence[Path] = (),
 ) -> Tuple[Check, FileDifferences]:

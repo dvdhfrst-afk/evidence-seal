@@ -6,12 +6,44 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from . import __version__, render, reporting, sealing, showing, stamping, trust, verification
+from . import __version__, render, reporting, scan, sealing, showing, stamping, trust, verification
 from .errors import DerError, EvidenceSealError, TokenFormatError, UsageError
 from .results import EXIT_FAILED, EXIT_USAGE, EXIT_VERIFIED, Status
 from .trust import TrustStore
+
+
+class _ExcludeAction(argparse.Action):
+    """Keeps --exclude and --exclude-from in the order given, because the last rule that applies wins."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        items = list(getattr(namespace, self.dest) or [])
+        items.append((option_string, values))
+        setattr(namespace, self.dest, items)
+
+
+def _add_exclude_options(parser: argparse.ArgumentParser, pattern_help: str) -> None:
+    parser.add_argument("--exclude", action=_ExcludeAction, dest="exclude", default=[], metavar="PATTERN", help=pattern_help)
+    parser.add_argument(
+        "--exclude-from",
+        action=_ExcludeAction,
+        dest="exclude",
+        metavar="FILE",
+        help="read patterns from this file, one per line, with # for comments; can repeat",
+    )
+
+
+def _exclude_rules(args: argparse.Namespace) -> List[Tuple[str, str]]:
+    rules: List[Tuple[str, str]] = []
+    for option, value in args.exclude:
+        if option == "--exclude-from":
+            rules.extend(scan.read_exclude_file(Path(value)))
+        elif scan.parse_rule(value) is None:
+            raise UsageError(f"the exclude pattern {value!r} has nothing to match")
+        else:
+            rules.append((value, "--exclude"))
+    return rules
 
 
 def _verify_arguments(parser: argparse.ArgumentParser) -> None:
@@ -35,13 +67,7 @@ def _verify_arguments(parser: argparse.ArgumentParser) -> None:
         help="extra certificates to build the chain from (not trusted by themselves); can repeat",
     )
     parser.add_argument("--query", type=Path, help="the saved .tsq request (default: the .tsq beside the manifest)")
-    parser.add_argument(
-        "--exclude",
-        action="append",
-        default=[],
-        metavar="PATTERN",
-        help="do not report new files matching this; sealed files are always checked; can repeat",
-    )
+    _add_exclude_options(parser, "do not report new files matching this; sealed files are always checked; can repeat")
     parser.add_argument("--allow-added", action="store_true", help="new files alone do not fail the file check")
     parser.add_argument("--skip-files", action="store_true", help="check only the token; the result cannot be a pass")
     parser.add_argument("--openssl", action="store_true", help="also run openssl ts -verify and report its answer")
@@ -57,8 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     seal = commands.add_parser("seal", help="write a manifest of a folder's files; stays offline")
     seal.add_argument("folder", type=Path)
-    seal.add_argument("--purpose", required=True, help="why this seal is being made, in your words")
-    seal.add_argument("--exclude", action="append", default=[], metavar="PATTERN", help="leave out matching files; can repeat")
+    seal.add_argument("--purpose", help="why this seal is being made, in your words; required unless --dry-run")
+    _add_exclude_options(seal, "leave out matching files, or put them back with a leading !; can repeat")
+    seal.add_argument("--dry-run", action="store_true", help="show what would be sealed and left out; opens and writes nothing")
     seal.add_argument("--out", type=Path, help="manifest path (default: beside the folder)")
     seal.add_argument("--date", help="value for the created field (default: now)")
     seal.add_argument("--force", action="store_true", help="replace an existing manifest")
@@ -97,21 +124,60 @@ def _options(args: argparse.Namespace) -> verification.VerifyOptions:
         ca_files=args.ca,
         untrusted_files=args.untrusted,
         query_path=args.query,
-        excludes=args.exclude,
+        excludes=_exclude_rules(args),
         allow_added=args.allow_added,
         skip_files=args.skip_files,
         cross_check=args.openssl,
     )
 
 
+def _print_preview(preview: sealing.SealPreview) -> None:
+    print("Dry run: no file was opened or hashed, and nothing was written.")
+    print(f"Would seal {len(preview.files)} files, {preview.total_bytes} bytes, from {preview.folder}")
+    print(f"Manifest would be: {preview.manifest_path}")
+    if preview.manifest_exists:
+        print("  It already exists, so a real run needs --force or another --out.")
+    print(f"\nFiles ({len(preview.files)}):")
+    for relative, size in preview.files:
+        print(f"  {size:>12}  {relative}")
+    if preview.left_out:
+        print(f"\nLeft out ({len(preview.left_out)}):")
+        for shown, rule in preview.left_out:
+            print(f"  {shown}  by {rule.text} ({rule.source or 'no source'})")
+    if preview.links or preview.special:
+        print(f"\nListed by name only, not hashed ({len(preview.links) + len(preview.special)}):")
+        for relative in preview.links + preview.special:
+            print(f"  {relative}")
+    _print_unmatched(preview.unmatched)
+    if preview.errors:
+        print(f"\nCould not be read, so a real run would stop ({len(preview.errors)}):")
+        for relative, reason in preview.errors:
+            print(f"  {relative}: {reason}")
+
+
+def _print_unmatched(rules: List[scan.ExcludeRule]) -> None:
+    if rules:
+        print("Exclude patterns that matched nothing, so check the spelling:")
+        for rule in rules:
+            print(f"  {rule.text} ({rule.source})")
+
+
 def command_seal(args: argparse.Namespace) -> int:
-    result = sealing.seal_folder(args.folder, args.purpose, args.exclude, args.out, args.date, args.force)
+    rules = _exclude_rules(args)
+    if args.dry_run:
+        preview = sealing.preview_folder(args.folder, rules, args.out, args.date)
+        _print_preview(preview)
+        return EXIT_FAILED if preview.errors or not preview.files else EXIT_VERIFIED
+    if args.purpose is None:
+        raise UsageError("seal needs --purpose, saying why this seal is being made")
+    result = sealing.seal_folder(args.folder, args.purpose, rules, args.out, args.date, args.force)
     print(f"Sealed {result.file_count} files, {result.total_bytes} bytes.")
     print(f"Manifest: {result.manifest_path}")
     if result.excluded:
         print(f"Left out by excludes: {len(result.excluded)} items.")
     if result.links or result.special:
         print(f"Listed by name only, not hashed: {len(result.links) + len(result.special)} links or special files.")
+    _print_unmatched(result.unmatched)
     print("The manifest alone proves no date. To get a timestamp, send its hash to an authority:")
     print(f"  python -m evidence_seal stamp {_shown(result.manifest_path)}")
     return EXIT_VERIFIED
