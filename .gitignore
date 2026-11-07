@@ -12,3 +12,6 @@ node_modules/
 .pytest_cache/
 .mypy_cache/
 .next/
+
+# What the quick start writes beside the sample folder
+examples/my-work-manifest*

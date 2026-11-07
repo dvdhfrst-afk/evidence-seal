@@ -1,0 +1,12 @@
+evidence-seal manifest v1
+purpose: My designs before the Acme meeting
+created: 2026-11-07
+folder: my-work
+algorithm: sha256
+files: 4
+total-bytes: 490
+
+40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880  256  data/readings.bin
+5bd6628db6669ef12ab0fc4b6592c3087f3429f8c16e0422a8011d52ae2845fb  85  meeting-notes.txt
+eae3b2b0cf87661da983053fd6335271b706582c3cdc297b19b829b1dba5b8f1  114  plans.txt
+e665b2ff78469c4fcbfc52de87e880e1a7b2f101ecdf0ad697b2e21f6c0eff08  35  résumé draft.txt

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import glob
 import os
+import re
+import shutil
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from . import hashes, manifest, scan
 from .errors import ManifestError, SealError, UsageError
@@ -20,6 +23,7 @@ REPORT_TEXT_SUFFIX = ".report.txt"
 REPORT_HTML_SUFFIX = ".report.html"
 OWN_FILES = "the manifest's own files"
 COMPANION_SUFFIXES = (TOKEN_SUFFIX, QUERY_SUFFIX, ROOT_SUFFIX, REPORT_TEXT_SUFFIX, REPORT_HTML_SUFFIX)
+KEPT_MARK = ".replaced-"
 
 
 @dataclass
@@ -71,26 +75,133 @@ def default_manifest_path(folder: Path, created: str) -> Path:
     return folder.parent / f"{folder.name}-manifest-{created[:10]}.txt"
 
 
+def path_key(path: Path) -> str:
+    """A form of a path for comparing whether two paths name the same file."""
+    text = os.path.abspath(str(path))
+    try:
+        text = os.path.realpath(text)
+    except OSError:
+        pass
+    if text.startswith("\\\\?\\UNC\\"):
+        text = "\\\\" + text[8:]
+    elif text.startswith("\\\\?\\"):
+        text = text[4:]
+    return os.path.normcase(text)
+
+
+def _file_mode(path: Path) -> int:
+    """The mode the file would have if opened normally. A temporary file starts out private to its owner."""
+    try:
+        return stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        mask = os.umask(0)
+        os.umask(mask)
+        return 0o666 & ~mask
+
+
+def _sync_folder(folder: Path) -> None:
+    """Asks the system to record the new name on disk too. Windows has no such call."""
+    if os.name == "nt":
+        return
+    try:
+        handle = os.open(str(folder), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(handle)
+    except OSError:
+        pass
+    finally:
+        os.close(handle)
+
+
+def check_can_write(path: Path) -> None:
+    """Finds out before any long work whether the file could be written at all."""
+    folder = Path(path).parent
+    while not folder.exists() and folder != folder.parent:
+        folder = folder.parent
+    try:
+        handle, temp_name = tempfile.mkstemp(prefix=".evidence-seal-", suffix=".tmp", dir=str(folder))
+        os.close(handle)
+        os.unlink(temp_name)
+    except OSError as exc:
+        raise ManifestError(f"cannot write in {folder}: {exc.strerror or exc}. Choose another place with --out") from None
+
+
 def write_new_file(path: Path, data: bytes, force: bool = False) -> None:
     """Writes through a temporary file so a crash cannot leave half a manifest or token."""
     path = Path(path)
-    if path.exists() and not force:
+    if path.is_dir():
+        raise UsageError(f"{path} is a folder. Give a file name")
+    if os.path.lexists(path) and not force:
         raise ManifestError(f"{path} already exists; use --force to replace it, or choose another name")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        mode = _file_mode(path)
         handle, temp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
     except OSError as exc:
         raise ManifestError(f"cannot write {path}: {exc.strerror or exc}") from None
     try:
         with os.fdopen(handle, "wb") as stream:
             stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temp_name, mode)
         os.replace(temp_name, path)
-    except OSError as exc:
+    except BaseException as exc:
         try:
             os.unlink(temp_name)
         except OSError:
             pass
-        raise ManifestError(f"cannot write {path}: {exc.strerror or exc}") from None
+        if isinstance(exc, OSError):
+            raise ManifestError(f"cannot write {path}: {exc.strerror or exc}. {path} was left as it was") from None
+        raise
+    _sync_folder(path.parent)
+
+
+def keep_copy_of(path: Path, new_bytes: bytes, moment: Optional[datetime] = None) -> Optional[Path]:
+    """Copies a file that is about to be replaced by different bytes. Returns where the copy went."""
+    path = Path(path)
+    try:
+        if path.read_bytes() == new_bytes:
+            return None
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ManifestError(f"cannot read {path} to keep a copy of it: {exc.strerror or exc}") from None
+    when = (moment or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    suffix = ROOT_SUFFIX if path.name.endswith(ROOT_SUFFIX) else path.suffix
+    stem = path.name[: -len(suffix)] if suffix else path.name
+    number = 1
+    copy = path.with_name(f"{stem}{KEPT_MARK}{when}{suffix}")
+    while os.path.lexists(copy):
+        number += 1
+        copy = path.with_name(f"{stem}{KEPT_MARK}{when}-{number}{suffix}")
+    try:
+        shutil.copy2(path, copy)
+    except OSError as exc:
+        raise ManifestError(f"cannot keep a copy of {path}: {exc.strerror or exc}. Nothing was replaced") from None
+    return copy
+
+
+def kept_copies(path: Path) -> List[Path]:
+    """The copies ``keep_copy_of`` made of the companions of this manifest or token."""
+    path = Path(path)
+    pattern = re.compile(
+        re.escape(path.with_suffix("").name) + re.escape(KEPT_MARK) + r"[0-9]{8}T[0-9]{6}Z(-[0-9]+)?(\.tsr|\.tst|\.tsq|\.ca\.crt)"
+    )
+    try:
+        return [found for found in path.parent.iterdir() if pattern.fullmatch(found.name)]
+    except OSError:
+        return []
+
+
+def token_in_the_way(manifest_path: Path) -> Optional[Path]:
+    """A token beside this manifest, which replacing the manifest would make worthless."""
+    for candidate in (token_path_for(manifest_path), manifest_path.with_name(manifest_path.name + TOKEN_SUFFIX)):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _sidecar_excludes(folder: Path, manifest_path: Path) -> List[Tuple[str, str]]:
@@ -99,8 +210,12 @@ def _sidecar_excludes(folder: Path, manifest_path: Path) -> List[Tuple[str, str]
         relative = manifest_path.relative_to(folder)
     except ValueError:
         return []
+    if not relative.name:
+        return []
     names = [relative] + [relative.with_suffix(suffix) for suffix in COMPANION_SUFFIXES]
-    return [(f"/{glob.escape(name.as_posix())}", OWN_FILES) for name in names]
+    rules = [(f"/{glob.escape(name.as_posix())}", OWN_FILES) for name in names]
+    rules.append((f"/{glob.escape(relative.with_suffix('').as_posix())}{KEPT_MARK}*", OWN_FILES))
+    return rules
 
 
 def _your_unmatched(rules: scan.Excludes) -> List[scan.ExcludeRule]:
@@ -110,9 +225,12 @@ def _your_unmatched(rules: scan.Excludes) -> List[scan.ExcludeRule]:
 def _resolve_paths(
     folder: Path, excludes: Sequence[scan.ExcludeItem], out: Optional[Path], created_text: str
 ) -> Tuple[Path, Path, scan.Excludes]:
+    given = folder
     folder = Path(folder).resolve()
+    if not folder.exists():
+        raise UsageError(f"{given} does not exist")
     if not folder.is_dir():
-        raise UsageError(f"{folder} is not a folder")
+        raise UsageError(f"{given} is a file, and seal takes a folder. Put the files you want to seal in a folder")
     manifest_path = Path(out).resolve() if out else default_manifest_path(folder, created_text)
     return folder, manifest_path, scan.Excludes(list(excludes) + _sidecar_excludes(folder, manifest_path))
 
@@ -158,18 +276,30 @@ def seal_folder(
     out: Optional[Path] = None,
     created: Optional[str] = None,
     force: bool = False,
+    report: Optional[Callable[[scan.Meter], None]] = None,
 ) -> SealResult:
     if not purpose.strip():
         raise UsageError("--purpose must say why this seal is being made")
     created_text = normalize_created(created)
     folder, manifest_path, rules = _resolve_paths(folder, excludes, out, created_text)
+    if manifest_path.is_dir():
+        raise UsageError(f"{manifest_path} is a folder. Give --out a file name")
     if manifest_path.exists() and not force:
         raise ManifestError(f"{manifest_path} already exists; use --force to replace it, or choose another name")
+    token = token_in_the_way(manifest_path) if manifest_path.exists() else None
+    if token is not None:
+        raise SealError(
+            f"{token} covers the manifest {manifest_path.name}, and replacing that manifest would make the token"
+            " worthless. An old token cannot be issued again, so nothing was replaced. Choose a new name with --out,"
+            " or move both files somewhere safe first"
+        )
+    check_can_write(manifest_path)
     walked = scan.walk(folder, rules)
     scan.require_clean_walk(walked)
     if not walked.files:
         raise SealError(f"{folder} has no files to seal after excludes")
-    rows = scan.hash_all(walked.files, hashes.SHA256)
+    total = scan.measure_and_open(walked.files)
+    rows = scan.hash_all(walked.files, hashes.SHA256, scan.Meter(report, len(walked.files), total))
     data = manifest.render(
         rows,
         purpose.strip(),

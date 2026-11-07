@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import List
 
 from .results import FAILED, VERIFIED, Status, Verification
+from .text import count_of, printable_block
 
 MAX_LISTED = 200
 _STATUS_WORD = {Status.PASS: "PASS", Status.FAIL: "FAIL", Status.NOT_CHECKED: "NOT CHECKED"}
@@ -52,7 +53,7 @@ def render_text(verification: Verification) -> str:
     if verification.created:
         lines.append(f"  Created field (a claim, not proof): {verification.created}")
     size = "" if verification.total_bytes is None else f", {verification.total_bytes} bytes"
-    lines.append(f"  Lists: {verification.file_count} files{size}")
+    lines.append(f"  Lists: {count_of(verification.file_count, 'file')}{size}")
     lines.append(f"Token: {verification.token_name or 'none'}")
     lines.append(f"Folder: {verification.folder or 'not checked'}")
     lines.append("")
@@ -91,4 +92,4 @@ def render_text(verification: Verification) -> str:
     lines.append("")
     lines.append(f"RESULT: {verification.overall}")
     lines.append(summary_sentence(verification))
-    return "\n".join(lines) + "\n"
+    return printable_block(lines)

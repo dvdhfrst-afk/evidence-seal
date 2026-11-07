@@ -25,6 +25,8 @@ mkdir "$TMP/work"
 printf 'first\n' >"$TMP/work/a.txt"
 "$PY" -m evidence_seal seal "$TMP/work" --purpose "check.sh run" --out "$TMP/m.txt" >/dev/null
 
+"$PY" -m evidence_seal verify examples/sealed/my-work-manifest.txt --folder examples/my-work --ca examples/sealed/test-authority-root.crt >/dev/null
+
 # Each of these must not pass.
 if "$PY" -m evidence_seal verify "$TMP/m.txt" >/dev/null; then
     echo "check.sh: a manifest with no token passed" >&2

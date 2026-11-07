@@ -16,6 +16,8 @@ from .errors import DerError
 from .hashes import HashAlgorithm
 
 MIN_RSA_BITS = 2048
+MAX_RSA_BITS = 16384
+MAX_RSA_EXPONENT_BITS = 256
 
 
 class Unsupported(Exception):
@@ -101,6 +103,9 @@ def parse_public_key(spki: bytes):
         inner.finish()
         if n <= 0 or e < 3 or not e & 1:
             raise DerError("RSA public key has impossible values")
+        if n.bit_length() > MAX_RSA_BITS or e.bit_length() > MAX_RSA_EXPONENT_BITS:
+            # A hostile certificate could otherwise tie up this tool for hours in one calculation.
+            raise DerError(f"RSA public key is larger than this tool accepts ({n.bit_length()} bit)")
         return RsaKey(n, e)
     if algorithm.oid == oids.EC_PUBLIC_KEY:
         curve_oid = None

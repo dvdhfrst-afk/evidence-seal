@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from . import cms, tokencheck, tsp
+from .text import printable_block
 from .trust import authority_for_root
 from .x509 import Certificate
 
@@ -49,7 +50,7 @@ def render_text(data: Dict[str, Any]) -> str:
         if data["failure"]:
             lines.append(f"Reason given: {data['failure']}")
         lines.append("It proves nothing about any data.")
-        return "\n".join(lines) + "\n"
+        return printable_block(lines)
     lines.append("This is an RFC 3161 timestamp token.")
     lines.append("")
     lines.append("What it claims:")
@@ -79,4 +80,4 @@ def render_text(data: Dict[str, Any]) -> str:
             lines.append(f"    this fingerprint is built in as the {cert['known_root']} root")
     lines.append("")
     lines.append("Nothing above has been verified. This command only reads the token. Use verify to check it.")
-    return "\n".join(lines) + "\n"
+    return printable_block(lines)

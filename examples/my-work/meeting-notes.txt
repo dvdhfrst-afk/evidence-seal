@@ -1,0 +1,2 @@
+These notes end each line the Windows way.
+The seal keeps those bytes as they are.

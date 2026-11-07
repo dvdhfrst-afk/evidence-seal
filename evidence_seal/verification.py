@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from . import __version__, manifest, scan, sealing, tokencheck
 from .errors import CertificateFileError, UsageError
 from .manifest import Entry, Manifest
 from .results import Check, FileDifferences, Status, Verification
+from .text import count_of, same_text_form
 from .trust import TrustStore
 from .x509 import Certificate, load_certificates
 
@@ -40,6 +42,7 @@ class VerifyOptions:
     skip_files: bool = False
     cross_check: bool = False
     now: Optional[datetime] = None
+    report: Optional[Callable[[scan.Meter], None]] = None
 
 
 def _existing_token(manifest_path: Path) -> Optional[Path]:
@@ -63,12 +66,18 @@ def _find_folder(data: Manifest, manifest_path: Path, explicit: Optional[Path]) 
     if data.kind == manifest.HAND_MADE:
         return base
     name = data.folder_name
-    if not name or name == "." or "/" in name or "\\" in name or name == "..":
+    if not name or name in (".", "..") or "/" in name or "\\" in name or (os.name == "nt" and ":" in name):
         return None
     if (base / name).is_dir():
         return base / name
-    if base.name == name:
+    if same_text_form(base.name) == same_text_form(name):
         return base
+    try:
+        for entry in os.scandir(base):
+            if same_text_form(entry.name) == same_text_form(name) and entry.is_dir():
+                return Path(entry.path)
+    except OSError:
+        return None
     return None
 
 
@@ -88,6 +97,7 @@ def compare_folder(
     excludes: Sequence[scan.ExcludeItem] = (),
     allow_added: bool = False,
     own_files: Sequence[Path] = (),
+    report: Optional[Callable[[scan.Meter], None]] = None,
 ) -> Tuple[Check, FileDifferences]:
     """Re-hashes the folder and returns the files check and the list of differences."""
     differences = FileDifferences(total=len(data.entries))
@@ -95,6 +105,11 @@ def compare_folder(
     expected: Set[str] = set()
     missing_entries: Dict[str, Entry] = {}
     weak_seen = 0
+    listed = {entry.path for entry in data.entries}
+    other_forms = {
+        same_text_form(name): name for name in walked.files if not name.isascii() and name not in listed
+    }
+    meter = scan.Meter(report, len(data.entries), data.total_bytes or 0)
     for entry in data.entries:
         relative = _relative_entry_path(entry, folder)
         if relative is None:
@@ -102,6 +117,11 @@ def compare_folder(
             continue
         expected.add(relative)
         found = walked.files.get(relative)
+        if found is None and same_text_form(relative) in other_forms:
+            actual = other_forms[same_text_form(relative)]
+            found = walked.files[actual]
+            expected.add(actual)
+            differences.other_unicode_forms[relative] = actual
         if found is None:
             differences.missing.append(relative)
             missing_entries[relative] = entry
@@ -112,30 +132,32 @@ def compare_folder(
             if entry.size is not None and found.stat().st_size != entry.size:
                 differences.changed.append(relative)
                 continue
-            digest, _ = scan.hash_file(found, entry.algorithm)
+            digest, _ = scan.hash_file(found, entry.algorithm, meter)
         except OSError:
             differences.unreadable.append(relative)
             continue
+        meter.add_file()
         if digest == entry.hexdigest:
             differences.unchanged += 1
         else:
             differences.changed.append(relative)
 
-    own = {Path(path).resolve() for path in own_files}
+    own = {sealing.path_key(path) for path in own_files}
     extra_rules = scan.Excludes(excludes)
     for relative, found in walked.files.items():
         if relative in expected or extra_rules.matches(relative):
             continue
-        if found.resolve() in own:
+        if sealing.path_key(found) in own:
             differences.own_files.append(relative)
             continue
         differences.added.append(relative)
+    recorded = {same_text_form(relative) for relative in data.links + data.special}
     for relative in walked.links + walked.special:
-        if relative not in data.links and relative not in data.special and not extra_rules.matches(relative):
+        if same_text_form(relative) not in recorded and not extra_rules.matches(relative):
             differences.added.append(relative)
-    present = set(walked.links) | set(walked.special)
+    present = {same_text_form(relative) for relative in walked.links + walked.special}
     for relative in data.links + data.special:
-        if relative not in present:
+        if same_text_form(relative) not in present:
             differences.missing.append(relative)
     differences.unreadable.extend(path for path, _ in walked.errors)
     differences.changed.sort(key=scan.sort_key)
@@ -201,10 +223,7 @@ def _files_check(data: Manifest, differences: FileDifferences, allow_added: bool
 
 
 def _read_optional(path: Path, what: str) -> bytes:
-    try:
-        return Path(path).read_bytes()
-    except OSError as exc:
-        raise UsageError(f"cannot read {what} {path}: {exc.strerror or exc}") from None
+    return manifest.read_limited(path, what, manifest.MAX_SIDE_FILE_BYTES)
 
 
 def _load_certificates(paths: Sequence[Path]) -> List[Certificate]:
@@ -217,6 +236,8 @@ def _load_certificates(paths: Sequence[Path]) -> List[Certificate]:
 def verify(options: VerifyOptions) -> Verification:
     now = options.now or datetime.now(timezone.utc)
     manifest_path = Path(options.manifest_path)
+    if manifest_path.is_dir():
+        raise UsageError(f"{manifest_path} is a folder. Give the manifest file that seal wrote, and --folder if needed")
     if not manifest_path.is_file():
         raise UsageError(f"manifest {manifest_path} does not exist")
     data = manifest.read_manifest(manifest_path)
@@ -230,14 +251,23 @@ def verify(options: VerifyOptions) -> Verification:
     if options.token_path and not Path(options.token_path).is_file():
         raise UsageError(f"token {options.token_path} does not exist")
     query_path = Path(options.query_path) if options.query_path else None
-    if query_path is None and sealing.query_path_for(manifest_path).is_file():
-        query_path = sealing.query_path_for(manifest_path)
+    if query_path is None and token_path is not None and token_path.with_suffix(sealing.QUERY_SUFFIX).is_file():
+        # The request saved with this token, which is not the manifest's if a second token was made with --out.
+        query_path = token_path.with_suffix(sealing.QUERY_SUFFIX)
 
     differences: Optional[FileDifferences] = None
     folder = None
     notes: List[str] = []
     if options.skip_files:
         files_check = Check(FILES, "Files match the manifest", Status.NOT_CHECKED, "skipped at your request")
+    elif data.newer_version is not None:
+        files_check = Check(
+            FILES,
+            "Files match the manifest",
+            Status.NOT_CHECKED,
+            f"this manifest uses format v{data.newer_version}, and evidence-seal {__version__} reads format"
+            f" v{manifest.FORMAT_VERSION}. Use a version of evidence-seal that reads it; nothing here is damaged",
+        )
     else:
         folder = _find_folder(data, manifest_path, options.folder)
         if folder is None:
@@ -251,17 +281,24 @@ def verify(options: VerifyOptions) -> Verification:
             own = [manifest_path] + sealing.companion_paths(manifest_path)
             own += ([token_path] if token_path else []) + ([query_path] if query_path else [])
             own += list(options.ca_files) + list(options.untrusted_files)
+            own += sealing.kept_copies(manifest_path) + (sealing.kept_copies(token_path) if token_path else [])
             files_check, differences = compare_folder(
                 data,
                 folder,
                 options.excludes,
                 options.allow_added,
                 own,
+                options.report,
             )
     if differences is not None and differences.own_files:
         notes.append(
             "In the folder but not compared, as the manifest's own companion files or files named in this command: "
             + ", ".join(differences.own_files)
+        )
+    if differences is not None and differences.other_unicode_forms:
+        notes.append(
+            f"{count_of(len(differences.other_unicode_forms), 'file')} matched under another Unicode form of the same"
+            " name, which copying between systems can cause. The contents were compared as usual."
         )
     if data.excludes:
         notes.append(

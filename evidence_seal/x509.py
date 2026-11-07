@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +23,8 @@ _PEM_BLOCK = re.compile(
     rb"-----BEGIN (?:TRUSTED |X509 )?CERTIFICATE-----(.+?)-----END (?:TRUSTED |X509 )?CERTIFICATE-----",
     re.DOTALL,
 )
+
+MAX_CERTIFICATE_FILE_BYTES = 64 * 1024 * 1024
 
 
 class Name:
@@ -212,7 +215,10 @@ def certificates_from_bytes(data: bytes, label: str) -> List[Certificate]:
 
 def load_certificates(path: Path) -> List[Certificate]:
     try:
-        data = Path(path).read_bytes()
+        with open(path, "rb") as handle:
+            if os.fstat(handle.fileno()).st_size > MAX_CERTIFICATE_FILE_BYTES:
+                raise CertificateFileError(f"{path} is too large to be a certificate file")
+            data = handle.read()
     except OSError as exc:
         raise CertificateFileError(f"cannot read {path}: {exc.strerror or exc}") from None
     return certificates_from_bytes(data, str(path))

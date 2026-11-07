@@ -19,6 +19,7 @@ from .trust import TrustStore
 from .x509 import KU_DIGITAL_SIGNATURE, KU_KEY_CERT_SIGN, KU_NON_REPUDIATION, Certificate
 
 MAX_PATH = 8
+MAX_SIGNATURE_CHECKS = 64
 
 OK = "ok"
 FAILED = "failed"
@@ -101,6 +102,7 @@ class _Search:
         self.failures: List[str] = []
         self.unanchored: List[str] = []
         self.unsupported: List[str] = []
+        self.checks_left = MAX_SIGNATURE_CHECKS
 
     def walk(self, path: List[Certificate], methods: List[str], weak: Optional[str]) -> Optional[ChainResult]:
         current = path[-1]
@@ -133,6 +135,11 @@ class _Search:
                 self.unanchored.append(f"the issuer of {current.subject.display()} is not available")
             return None
         for issuer in issuers:
+            if self.checks_left <= 0:
+                # Many certificates with the same name could otherwise make this search take days.
+                self.unsupported.append("the certificates in this token take too many attempts to sort out")
+                return None
+            self.checks_left -= 1
             try:
                 outcome = signatures.verify(
                     issuer.public_key, current.signature_algorithm, current.tbs_raw, current.signature

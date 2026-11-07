@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 import shlex
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from typing import List, Optional, Tuple
 from . import der, render
 from .results import Verification
 from .sealing import REPORT_HTML_SUFFIX, REPORT_TEXT_SUFFIX
+from .text import printable, printable_block
 from .trust import authority_for_root
 from .x509 import Certificate
 
@@ -30,7 +32,10 @@ DEPENDS_ON = (
     "The continued strength of SHA-256 and of the signature algorithm.",
     "This is a technical summary and not legal advice. Whether it is admissible or persuasive is for a lawyer to judge.",
 )
-_PLAIN_ARGUMENT = re.compile(r"^[A-Za-z0-9_./:=@+,-]+$")
+# Safe bare in sh, cmd.exe and PowerShell alike. A backslash only counts as plain where it separates folders.
+_PLAIN_ARGUMENT = re.compile(r"^[A-Za-z0-9_./:=+\\-]+$" if os.name == "nt" else r"^[A-Za-z0-9_./:=+-]+$")
+# Safe inside double quotes in all three. Letters and digits of any script, plus a few marks.
+_QUOTABLE_ARGUMENT = re.compile(r"^(?:\w|[ ./:=+,@()\\-])+$" if os.name == "nt" else r"^(?:\w|[ ./:=+,@()-])+$")
 
 
 @dataclass
@@ -42,7 +47,15 @@ class ReportContext:
 
 
 def quote_argument(argument: str) -> str:
-    return argument if _PLAIN_ARGUMENT.match(argument) else shlex.quote(argument)
+    if _PLAIN_ARGUMENT.match(argument):
+        return argument
+    if _QUOTABLE_ARGUMENT.match(argument):
+        return f'"{argument}"'
+    return shlex.quote(argument)
+
+
+def _is_safe_everywhere(name: str) -> bool:
+    return bool(_PLAIN_ARGUMENT.match(name) or _QUOTABLE_ARGUMENT.match(name))
 
 
 def _root_certificate(verification: Verification) -> Optional[Certificate]:
@@ -55,10 +68,29 @@ def _root_certificate(verification: Verification) -> Optional[Certificate]:
 def openssl_commands(verification: Verification, context: ReportContext) -> List[Tuple[str, str]]:
     """Each step as (explanation, command). One command per step, with nothing chained."""
     steps: List[Tuple[str, str]] = []
-    token = context.token_file
-    if token is None:
+    if context.token_file is None:
         return steps
-    root_name = context.root_file or "authority-root.crt"
+    # A name came from whoever sent these files, and a reader may paste these commands into any shell.
+    copies: List[str] = []
+
+    def safe(name: str, plain: str) -> str:
+        if _is_safe_everywhere(name):
+            return name
+        copies.append(f"{name} to {plain}")
+        return plain
+
+    manifest_file = safe(context.manifest_file, "manifest.txt")
+    token = safe(context.token_file, "token.tsr")
+    root_name = safe(context.root_file or "authority-root.crt", "authority-root.crt")
+    if copies:
+        steps.append(
+            (
+                "These names hold characters a command prompt could act on, so copy each one to a plain name first: "
+                + "; ".join(copies)
+                + ".",
+                "",
+            )
+        )
     root = _root_certificate(verification)
     if root is not None:
         known = authority_for_root(root.sha256)
@@ -79,14 +111,14 @@ def openssl_commands(verification: Verification, context: ReportContext) -> List
                 f"openssl x509 -in {quote_argument(root_name)} -noout -fingerprint -sha256",
             )
         )
-    command = f"openssl ts -verify -data {quote_argument(context.manifest_file)} -in {quote_argument(token)}"
+    command = f"openssl ts -verify -data {quote_argument(manifest_file)} -in {quote_argument(token)}"
     if verification.facts is not None and verification.facts.is_bare_token:
         command += " -token_in"
     command += f" -CAfile {quote_argument(root_name)}"
     explanation = "Check the token against the manifest and that root. A good token prints Verification: OK."
     for number, extra in enumerate(context.untrusted_files, 1):
         usable = extra
-        if not _PLAIN_ARGUMENT.match(extra) or "," in extra:
+        if not _PLAIN_ARGUMENT.match(extra):
             # Openssl reads -untrusted as a list split on spaces and commas, and no quoting gets past that.
             usable = f"extra-{number}.crt"
             explanation += f" First copy {extra} to {usable}, because openssl cannot read that name here."
@@ -175,7 +207,8 @@ def render_report_text(verification: Verification, context: ReportContext) -> st
         lines.extend(["", "CHECK IT YOURSELF, WITHOUT TRUSTING THIS TOOL", "Run these in the folder holding the manifest and token:"])
         for number, (explanation, command) in enumerate(steps, 1):
             lines.append(f"  {number}. {explanation}")
-            lines.append(f"     {command}")
+            if command:
+                lines.append(f"     {command}")
     lines.extend(["", "WHAT THIS SHOWS"])
     lines.extend(f"  {item}" for item in SHOWS)
     lines.extend(["WHAT THIS DOES NOT SHOW"])
@@ -183,7 +216,7 @@ def render_report_text(verification: Verification, context: ReportContext) -> st
     lines.extend(f"  {limit}" for limit in verification.limits[:1])
     lines.extend(["WHAT IT DEPENDS ON"])
     lines.extend(f"  {item}" for item in DEPENDS_ON)
-    return "\n".join(lines) + "\n"
+    return printable_block(lines)
 
 
 _HTML_STYLE = """
@@ -204,12 +237,16 @@ ol, ul { margin: 0.2rem 0; padding-left: 1.2rem; }
 """
 
 
+def _safe_html(text: object) -> str:
+    return html.escape(printable(text))
+
+
 def _html_list(items) -> str:
-    return "<ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in items) + "</ul>"
+    return "<ul>" + "".join(f"<li>{_safe_html(item)}</li>" for item in items) + "</ul>"
 
 
 def render_report_html(verification: Verification, context: ReportContext) -> str:
-    e = html.escape
+    e = _safe_html
     overall = verification.overall
     parts: List[str] = [
         "<!doctype html>",
@@ -237,7 +274,8 @@ def render_report_html(verification: Verification, context: ReportContext) -> st
         parts.append("<h2>Check it yourself, without trusting this tool</h2>")
         parts.append("<p>Run these in the folder holding the manifest and token:</p><ol>")
         for explanation, command in steps:
-            parts.append(f"<li>{e(explanation)}<code>{e(command)}</code></li>")
+            shown = f"<code>{e(command)}</code>" if command else ""
+            parts.append(f"<li>{e(explanation)}{shown}</li>")
         parts.append("</ol>")
     parts.append("<h2>What this shows</h2>" + _html_list(SHOWS))
     parts.append("<h2>What this does not show</h2>" + _html_list(tuple(DOES_NOT_SHOW) + tuple(verification.limits[:1])))

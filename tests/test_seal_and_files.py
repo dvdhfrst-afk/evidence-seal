@@ -120,7 +120,9 @@ class ExcludeRules(unittest.TestCase):
                 scan.read_exclude_file(path),
                 [("*.tmp", "rules.txt line 3"), ("build/", "rules.txt line 4"), ("!build/keep.txt", "rules.txt line 5")],
             )
-            path.write_bytes(b"\xff\xfe")
+            path.write_bytes(b"\xff\xfe" + "*.tmp\r\n".encode("utf-16-le"))
+            self.assertEqual(scan.read_exclude_file(path), [("*.tmp", "rules.txt line 1")])
+            path.write_bytes(b"\xc3\x28")
             with self.assertRaises(UsageError):
                 scan.read_exclude_file(path)
             with self.assertRaises(UsageError):
@@ -227,7 +229,10 @@ class Seal(TempFolderTestCase):
     def test_bad_inputs_are_clear_errors(self):
         code, _, err = run_cli("seal", self.temp / "nope", "--purpose", "p")
         self.assertEqual(code, 2)
-        self.assertIn("not a folder", err)
+        self.assertIn("does not exist", err)
+        code, _, err = run_cli("seal", self.write("a-file.txt"), "--purpose", "p")
+        self.assertEqual(code, 2)
+        self.assertIn("seal takes a folder", err)
         code, _, err = run_cli("seal", self.folder(), "--purpose", "p", "--date", "last week")
         self.assertEqual(code, 2)
 
@@ -561,10 +566,10 @@ class VerifyFiles(TempFolderTestCase):
         _, path = self.copy_sample()
         original = scan.hash_file
 
-        def failing(target, algorithm):
+        def failing(target, algorithm, meter=None):
             if str(target).endswith("notes.txt"):
                 raise PermissionError(13, "Permission denied")
-            return original(target, algorithm)
+            return original(target, algorithm, meter)
 
         with mock.patch("evidence_seal.scan.hash_file", failing):
             code, data = self.verify_json(path)

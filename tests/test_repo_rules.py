@@ -2,18 +2,31 @@
 
 import ast
 import base64
+import os
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TOP_FILES = ("README.md", "LICENSE", "pyproject.toml", "check.sh", ".gitignore", ".gitattributes")
+TOP_FILES = (
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "pyproject.toml",
+    "check.sh",
+    ".gitignore",
+    ".gitattributes",
+)
 TEXT_SUFFIXES = {".py", ".md", ".toml", ".sh"}
-SOURCE_DIRS = ("evidence_seal", "tests")
+SOURCE_DIRS = ("evidence_seal", "tests", "docs", "examples")
 ALLOWED_IMPORTS = {
-    "argparse", "ast", "base64", "contextlib", "dataclasses", "datetime", "enum", "fnmatch", "glob", "hashlib",
-    "html", "io", "json", "os", "pathlib", "random", "re", "secrets", "shlex", "shutil", "stat", "subprocess",
-    "sys", "tempfile", "typing", "unittest", "urllib", "evidence_seal", "tests", "__future__",
+    "argparse", "ast", "base64", "contextlib", "dataclasses", "datetime", "enum", "errno", "fnmatch", "glob", "hashlib",
+    "html", "http", "io", "json", "os", "pathlib", "random", "re", "secrets", "shlex", "shutil", "signal", "socket",
+    "ssl", "stat", "subprocess", "sys", "tempfile", "threading", "time", "traceback", "typing", "unicodedata",
+    "unittest", "urllib", "evidence_seal", "tests", "__future__",
 }
 
 
@@ -28,6 +41,28 @@ def repo_files():
 
 def python_files():
     return [path for path in repo_files() if path.suffix == ".py"]
+
+
+def files_kept_in_the_repository():
+    """What belongs to the repository, leaving out what using it creates: installs and real tokens."""
+    try:
+        listed = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        listed = None
+    if listed is not None and listed.returncode == 0 and listed.stdout:
+        names = os.fsdecode(listed.stdout).split("\0")
+        return sorted(ROOT / name for name in names if name and (ROOT / name).is_file())
+    made_by_use = {".git", "__pycache__", ".venv", "venv", "build", "dist"}
+    return [
+        path for path in sorted(ROOT.rglob("*"))
+        if path.is_file()
+        and not made_by_use.intersection(path.relative_to(ROOT).parts)
+        and not any(part.endswith(".egg-info") for part in path.relative_to(ROOT).parts)
+        and not (path.parent == ROOT / "examples" and path.name.startswith("my-work-manifest"))
+    ]
 
 
 class Sources(unittest.TestCase):
@@ -128,10 +163,7 @@ class Sources(unittest.TestCase):
     def test_no_file_contains_an_email_address(self):
         pattern = re.compile(rb"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
         pem = re.compile(rb"-----BEGIN [A-Z ]+-----(.*?)-----END", re.DOTALL)
-        for path in sorted(ROOT.rglob("*")):
-            parts = path.relative_to(ROOT).parts
-            if not path.is_file() or ".git" in parts or "__pycache__" in parts:
-                continue
+        for path in files_kept_in_the_repository():
             data = path.read_bytes()
             forms = [data, data.replace(b"\x00", b"")]
             if path.suffix != ".py":

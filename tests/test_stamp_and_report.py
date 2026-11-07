@@ -59,7 +59,7 @@ class Stamp(TempFolderTestCase):
         self.manifest = self.write("m.txt", b"manifest bytes\n")
 
     def run_stamp(self, fake, *extra):
-        with mock.patch("urllib.request.urlopen", fake):
+        with mock.patch("evidence_seal.stamping._open_url", fake):
             return run_cli("stamp", self.manifest, *extra)
 
     def store(self, fake):
@@ -202,7 +202,7 @@ class Stamp(TempFolderTestCase):
         self.assertIn("[PASS] Token answers the saved request", out)
 
     def test_only_this_module_uses_the_network(self):
-        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("network used")):
+        with mock.patch("evidence_seal.stamping._open_url", side_effect=AssertionError("network used")):
             self.assertEqual(run_cli("show", LOCAL / "token-rsa.tsr")[0], 0)
             self.assertEqual(run_cli("verify", self.manifest, "--skip-files")[0], 3)
             self.assertEqual(run_cli("seal", self.temp, "--purpose", "p", "--out", self.temp / "n" / "m.txt")[0], 0)
@@ -377,7 +377,7 @@ class Report(TempFolderTestCase):
         _, out, _ = run_cli(
             "report", renamed, "--folder", self.folder, "--ca", self.ca, "--out", "-", "--skip-files"
         )
-        self.assertIn("-data 'my manifest.txt' -in 'my manifest.tsr'", out)
+        self.assertIn('-data "my manifest.txt" -in "my manifest.tsr"', out)
 
     def _commands(self, report_text):
         return [line.strip() for line in report_text.splitlines() if line.strip().startswith("openssl ts -")]

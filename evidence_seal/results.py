@@ -17,6 +17,10 @@ EXIT_VERIFIED = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_INCOMPLETE = 3
+EXIT_INTERNAL = 4
+EXIT_INTERRUPTED = 130
+
+JSON_SCHEMA_VERSION = 1
 
 VERIFIED = "VERIFIED"
 FAILED = "FAILED"
@@ -66,6 +70,7 @@ class FileDifferences:
     unreadable: List[str] = field(default_factory=list)
     moved_hints: Dict[str, str] = field(default_factory=dict)
     own_files: List[str] = field(default_factory=list)
+    other_unicode_forms: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -77,6 +82,7 @@ class FileDifferences:
             "unreadable": self.unreadable,
             "possible_moves": self.moved_hints,
             "own_files_not_compared": self.own_files,
+            "matched_under_another_unicode_form": self.other_unicode_forms,
         }
 
 
@@ -146,6 +152,7 @@ class Verification:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "schema_version": JSON_SCHEMA_VERSION,
             "overall": self.overall,
             "exit_code": self.exit_code,
             "manifest": {

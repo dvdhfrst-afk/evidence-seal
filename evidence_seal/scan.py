@@ -13,12 +13,14 @@ import os
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 from .errors import SealError, UsageError
 from .hashes import HashAlgorithm
+from .text import same_text_form
 
 CHUNK = 1024 * 1024
+MAX_LISTED_PROBLEMS = 20
 
 _REPARSE_LINK_TAGS = {0xA000000C, 0xA0000003}  # Windows symbolic link and mount point
 
@@ -43,7 +45,7 @@ def parse_rule(pattern: str, source: str = "") -> Optional[ExcludeRule]:
     folder_only = body.endswith("/")
     body = body.rstrip("/")
     anchored = "/" in body
-    segments = tuple(part for part in body.split("/") if part)
+    segments = tuple(same_text_form(part) for part in body.split("/") if part)
     if not segments:
         return None
     if not anchored:
@@ -83,7 +85,8 @@ class Excludes:
 
     A rule that matches a folder applies to everything inside it, and when several
     rules apply the last one wins. Matching is case sensitive on every platform, so a
-    manifest means the same thing everywhere.
+    manifest means the same thing everywhere. Names are compared in one Unicode form,
+    because macOS and Linux can store the same name differently.
     """
 
     def __init__(self, patterns: Iterable[ExcludeItem] = ()):
@@ -101,7 +104,7 @@ class Excludes:
         """The index of the last rule that applies, or -1."""
         parent = relative.rpartition("/")[0]
         best = self._folder_winner(parent) if parent else -1
-        parts = relative.split("/")
+        parts = same_text_form(relative).split("/")
         for index, rule in enumerate(self.rules):
             if (is_dir or not rule.folder_only) and _segments_match(rule.segments, parts):
                 self._matched.add(index)
@@ -136,7 +139,9 @@ class Excludes:
 def read_exclude_file(path: Path) -> List[Tuple[str, str]]:
     """One pattern per line. Blank lines and lines starting with # are ignored."""
     try:
-        text = Path(path).read_bytes().decode("utf-8-sig")
+        data = Path(path).read_bytes()
+        # Windows PowerShell 5.1 writes UTF-16 when a list is redirected to a file.
+        text = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
     except OSError as exc:
         raise UsageError(f"cannot read exclude file {path}: {exc.strerror or exc}") from None
     except UnicodeDecodeError:
@@ -171,10 +176,22 @@ def sort_key(relative: str) -> bytes:
     return relative.encode("utf-8", "surrogatepass")
 
 
+def native_path(path: Path) -> Path:
+    """On Windows, the form that reaches long paths and names such as aux.txt or a trailing dot."""
+    if os.name != "nt":
+        return Path(path)
+    text = os.path.abspath(str(path))
+    if text.startswith("\\\\?\\"):
+        return Path(text)
+    if text.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + text[2:])
+    return Path("\\\\?\\" + text)
+
+
 def walk(root: Path, excludes: Excludes) -> WalkResult:
     """Lists every regular file under ``root``, keyed by its relative slash-separated path."""
     result = WalkResult()
-    pending: List[Tuple[Path, str]] = [(Path(root), "")]
+    pending: List[Tuple[Path, str]] = [(native_path(root), "")]
     while pending:
         folder, prefix = pending.pop()
         try:
@@ -213,7 +230,28 @@ def walk(root: Path, excludes: Excludes) -> WalkResult:
     return result
 
 
-def hash_file(path: Path, algorithm: HashAlgorithm) -> Tuple[str, int]:
+class Meter:
+    """Counts the work done, for whoever wants to show it. Showing it is optional."""
+
+    def __init__(self, report: Optional[Callable[["Meter"], None]] = None, total_files: int = 0, total_bytes: int = 0):
+        self.report = report
+        self.total_files = total_files
+        self.total_bytes = total_bytes
+        self.files = 0
+        self.bytes = 0
+
+    def add_bytes(self, count: int) -> None:
+        self.bytes += count
+        if self.report is not None:
+            self.report(self)
+
+    def add_file(self) -> None:
+        self.files += 1
+        if self.report is not None:
+            self.report(self)
+
+
+def hash_file(path: Path, algorithm: HashAlgorithm, meter: Optional[Meter] = None) -> Tuple[str, int]:
     """Hex hash and byte count of the raw file content."""
     hasher = algorithm.new()
     size = 0
@@ -224,22 +262,64 @@ def hash_file(path: Path, algorithm: HashAlgorithm) -> Tuple[str, int]:
                 break
             hasher.update(chunk)
             size += len(chunk)
+            if meter is not None:
+                meter.add_bytes(len(chunk))
     return hasher.hexdigest(), size
 
 
-def hash_all(files: Dict[str, Path], algorithm: HashAlgorithm) -> List[Tuple[str, str, int]]:
-    """Hashes every file in stable order. Any file that cannot be read stops the seal."""
+def _fingerprint(path: Path) -> Tuple[int, int]:
+    info = os.stat(path)
+    return info.st_size, info.st_mtime_ns
+
+
+def hash_all(
+    files: Dict[str, Path], algorithm: HashAlgorithm, meter: Optional[Meter] = None
+) -> List[Tuple[str, str, int]]:
+    """Hashes every file in stable order. A file that cannot be read, or that changes meanwhile, stops the seal."""
     rows: List[Tuple[str, str, int]] = []
     for relative in sorted(files, key=sort_key):
         try:
-            digest, size = hash_file(files[relative], algorithm)
+            before = _fingerprint(files[relative])
+            digest, size = hash_file(files[relative], algorithm, meter)
+            changed = _fingerprint(files[relative]) != before or size != before[0]
         except OSError as exc:
             raise SealError(f"cannot read {relative}: {exc.strerror or exc}") from None
+        if changed:
+            raise SealError(
+                f"{relative} changed while it was being read, so its hash would not match anything."
+                " Stop whatever is writing to it, or leave it out with --exclude, and seal again"
+            )
         rows.append((relative, digest, size))
+        if meter is not None:
+            meter.add_file()
     return rows
+
+
+def _describe_unreadable(problems: Sequence[Tuple[str, str]]) -> str:
+    shown = "; ".join(f"{path}: {reason}" for path, reason in problems[:MAX_LISTED_PROBLEMS])
+    more = len(problems) - MAX_LISTED_PROBLEMS
+    extra = f"; and {more} more" if more > 0 else ""
+    return (
+        f"cannot read {shown}{extra}. A seal must cover every file it claims to, so nothing was written."
+        " Close whatever holds these, fix their permissions, or leave them out with --exclude"
+    )
 
 
 def require_clean_walk(result: WalkResult) -> None:
     if result.errors:
-        path, reason = result.errors[0]
-        raise SealError(f"cannot read {path}: {reason}")
+        raise SealError(_describe_unreadable(result.errors))
+
+
+def measure_and_open(files: Dict[str, Path]) -> int:
+    """Finds every locked or unreadable file now, before any long hashing starts. Returns the total size."""
+    total = 0
+    problems: List[Tuple[str, str]] = []
+    for relative in sorted(files, key=sort_key):
+        try:
+            with open(files[relative], "rb") as handle:
+                total += os.fstat(handle.fileno()).st_size
+        except OSError as exc:
+            problems.append((relative, exc.strerror or str(exc)))
+    if problems:
+        raise SealError(_describe_unreadable(problems))
+    return total

@@ -390,7 +390,7 @@ def _name_check(info: tsp.TstInfo, signer: Certificate) -> Check:
 
 def _time_check(info: tsp.TstInfo, now: datetime) -> Check:
     if info.gen_time > now + FUTURE_MARGIN:
-        return _check(TIME, Status.FAIL, f"the token claims {format_time(info.gen_time)}, which is in the future")
+        return _check(TIME, Status.FAIL, f"the token claims {format_time(info.gen_time)}, which is in the future. If this computer's clock is wrong, correct it and check again")
     return _check(TIME, Status.PASS, f"{format_time(info.gen_time)} is not in the future")
 
 

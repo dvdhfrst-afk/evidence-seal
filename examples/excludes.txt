@@ -1,0 +1,9 @@
+# Patterns for seal --exclude-from. Lines starting with # are ignored.
+# Later lines win, so an ! line can put something back.
+
+.git
+*.tmp
+~*
+Thumbs.db
+desktop.ini
+.DS_Store

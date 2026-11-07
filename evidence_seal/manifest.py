@@ -8,25 +8,31 @@ either way and the tool must not require its own format to check a real proof.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import hashes
-from .errors import ManifestError
+from .errors import UsageError
 from .hashes import HashAlgorithm
 from .scan import sort_key
 
 MAGIC = "evidence-seal manifest v1"
+FORMAT_VERSION = 1
+MAX_MANIFEST_BYTES = 2 * 1024 * 1024 * 1024
+MAX_SIDE_FILE_BYTES = 64 * 1024 * 1024
 
 NATIVE = "native"
 HAND_MADE = "hand-made"
 
-_NATIVE_LINE = re.compile(r"^([0-9a-f]{64})  (\d+)  (.+)$", re.DOTALL)
+_ANY_VERSION = re.compile(rb"^evidence-seal manifest v([0-9]{1,9})(?:\r?\n|$)")
+_NUMBER = re.compile(r"^[0-9]{1,20}$")
+_NATIVE_LINE = re.compile(r"^([0-9a-f]{64})  ([0-9]{1,20})  (.+)$", re.DOTALL)
 _HEX_START = re.compile(r"^\\?[0-9a-fA-F]{32,128}(\s|$)")
 _GNU_LINE = re.compile(r"^(\\?)([0-9a-fA-F]{32,128})(?: \*| {2}| )(.+)$", re.DOTALL)
 _DATE_COLUMN = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s+(.*)$", re.DOTALL)
-_SIZE_COLUMN = re.compile(r"^(\d+) {2,}(.*)$", re.DOTALL)
+_SIZE_COLUMN = re.compile(r"^([0-9]{1,20}) {2,}(.*)$", re.DOTALL)
 _TAG_LINE = re.compile(r"^(?:SHA-?(1|224|256|384|512)|SHA2-(224|256|384|512)|MD5) ?\((.+)\) ?= ?([0-9a-fA-F]{32,128})$", re.DOTALL)
 
 
@@ -53,6 +59,7 @@ class Manifest:
     note_lines: int = 0
     unreadable_lines: int = 0
     weak_entries: int = 0
+    newer_version: Optional[int] = None
 
     @property
     def total_bytes(self) -> Optional[int]:
@@ -137,9 +144,12 @@ def render(
 
 def parse(raw: bytes) -> Manifest:
     """Reads manifest bytes. Native and hand-made manifests are told apart by the first line."""
+    version = _ANY_VERSION.match(raw)
+    if version is not None and int(version.group(1)) != FORMAT_VERSION:
+        return Manifest(NATIVE, raw, newer_version=int(version.group(1)))
     if raw.startswith(MAGIC.encode("ascii") + b"\n"):
         return _parse_native(raw)
-    if raw.startswith(MAGIC.encode("ascii")):
+    if version is not None:
         manifest = Manifest(NATIVE, raw)
         manifest.problems.append("the native manifest does not use plain line feeds, so its bytes were altered")
         return manifest
@@ -185,9 +195,9 @@ def _parse_native(raw: bytes) -> Manifest:
             manifest.links.append(unescape_text(value))
         elif key == "special":
             manifest.special.append(unescape_text(value))
-        elif key == "files" and value.isdigit():
+        elif key == "files" and _NUMBER.match(value):
             declared_files = int(value)
-        elif key == "total-bytes" and value.isdigit():
+        elif key == "total-bytes" and _NUMBER.match(value):
             declared_bytes = int(value)
         else:
             manifest.problems.append(f"header line {index} is not understood")
@@ -248,7 +258,10 @@ def _parse_hand_made(raw: bytes) -> Manifest:
     manifest = Manifest(HAND_MADE, raw)
     start = 3 if raw.startswith(b"\xef\xbb\xbf") else 0
     try:
-        text = raw[start:].decode("utf-8")
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            text = raw.decode("utf-16")  # What Windows PowerShell 5.1 writes when output is redirected
+        else:
+            text = raw[start:].decode("utf-8")
     except UnicodeDecodeError:
         text = raw[start:].decode("latin-1")
     seen: Dict[str, Entry] = {}
@@ -291,10 +304,16 @@ def _read_hash_first_line(manifest: Manifest, line: str, seen: Dict[str, Entry])
     _add_hand_entry(manifest, rest, hexdigest, size, seen)
 
 
-def read_manifest(path) -> Manifest:
+def read_limited(path, what: str, limit: int = MAX_MANIFEST_BYTES) -> bytes:
+    """Reads a whole file, and refuses one far larger than this kind of file can honestly be."""
     try:
         with open(path, "rb") as handle:
-            raw = handle.read()
+            if os.fstat(handle.fileno()).st_size > limit:
+                raise UsageError(f"{what} {path} is too large to be one (over {limit // (1024 * 1024)} MB)")
+            return handle.read()
     except OSError as exc:
-        raise ManifestError(f"cannot read manifest {path}: {exc.strerror or exc}") from None
-    return parse(raw)
+        raise UsageError(f"cannot read {what} {path}: {exc.strerror or exc}") from None
+
+
+def read_manifest(path) -> Manifest:
+    return parse(read_limited(path, "manifest"))
