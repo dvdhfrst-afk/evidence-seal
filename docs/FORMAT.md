@@ -84,3 +84,8 @@ field is removed or changes meaning only with a new number. JSON is plain ASCII,
 kept in JSON escapes. Control characters are therefore present in the decoded values, so a program that
 prints them should treat them as untrusted text. Only a run that reached a verdict prints JSON. Exit
 code 2, 4 or 130 means there is none, and the message goes to standard error.
+
+## The settings file
+
+The optional settings file and its profiles are described in [SETTINGS.md](SETTINGS.md). Nothing in
+it changes the manifest format.
