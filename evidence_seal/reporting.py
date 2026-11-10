@@ -225,7 +225,7 @@ def render_report_text(verification: Verification, context: ReportContext) -> st
     return printable_block(lines)
 
 
-_HTML_STYLE = """
+HTML_STYLE = """
 :root { color-scheme: light; }
 body { font: 14px/1.4 Georgia, "Times New Roman", serif; color: #1c1b19; background: #fbfaf7;
        max-width: 46rem; margin: 1.5rem auto; padding: 0 1rem; }
@@ -259,7 +259,7 @@ def render_report_html(verification: Verification, context: ReportContext) -> st
         '<html lang="en"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         "<title>Evidence Seal Report</title>",
-        f"<style>{_HTML_STYLE}</style></head><body>",
+        f"<style>{HTML_STYLE}</style></head><body>",
         "<h1>Evidence seal report</h1>",
         f"<p>Checked {e(verification.checked_at)} by evidence-seal {e(verification.tool_version)}</p>",
         f'<p class="result">Result: {e(overall)}</p>',

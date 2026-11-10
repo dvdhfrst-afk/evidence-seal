@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import __version__, pdf
 from . import library as lib
-from .reporting import _HTML_STYLE
+from .reporting import HTML_STYLE
 from .text import count_of, csv_table, markdown_block, markdown_text, printable, printable_block, xml_text
 
 REGISTER_SCHEMA_VERSION = 1
@@ -367,7 +367,7 @@ def _markdown(register: Register) -> bytes:
 
 
 _REGISTER_STYLE = (
-    _HTML_STYLE
+    HTML_STYLE
     + "h3 { font-size: 0.9rem; margin: 0.6rem 0 0.2rem; }\n"
     + ".note { margin: 0.3rem 0 0.5rem; } .note p { margin: 0.1rem 0 0 1rem; }\n"
     + ".withdrawn { color: #5a574f; }\n"
