@@ -11,6 +11,9 @@ fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+# The commands below record into a library of their own, never the one in your home folder.
+EVIDENCE_SEAL_HOME="$TMP/home"
+export EVIDENCE_SEAL_HOME
 FIXTURES=tests/fixtures
 SAMPLE="$FIXTURES/local-authority/token-rsa.tsr"
 ROOT="$FIXTURES/local-authority/root-rsa.crt"
@@ -26,6 +29,12 @@ printf 'first\n' >"$TMP/work/a.txt"
 "$PY" -m evidence_seal seal "$TMP/work" --purpose "check.sh run" --out "$TMP/m.txt" >/dev/null
 
 "$PY" -m evidence_seal verify examples/sealed/my-work-manifest.txt --folder examples/my-work --ca examples/sealed/test-authority-root.crt >/dev/null
+
+# The library recorded those runs, is sound, and verifies the sample from its own copies.
+"$PY" -m evidence_seal library check >/dev/null
+"$PY" -m evidence_seal library list --json >"$TMP/library.json"
+grep -q '"last_result": "VERIFIED"' "$TMP/library.json"
+"$PY" -m evidence_seal library verify 5ea307 --ca "$ROOT" >/dev/null
 
 # Each of these must not pass.
 if "$PY" -m evidence_seal verify "$TMP/m.txt" >/dev/null; then

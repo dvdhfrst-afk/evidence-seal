@@ -12,10 +12,10 @@ import traceback
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import __version__, authorities, render, report_formats, reporting, scan, sealing, settings, showing, stamping, trust, verification
+from . import __version__, authorities, library, render, report_formats, reporting, scan, sealing, settings, showing, stamping, trust, verification
 from .errors import DerError, EvidenceSealError, TokenFormatError, UsageError
 from .manifest import MAX_SIDE_FILE_BYTES, read_limited
-from .results import EXIT_FAILED, EXIT_INTERNAL, EXIT_INTERRUPTED, EXIT_USAGE, EXIT_VERIFIED, Status
+from .results import EXIT_FAILED, EXIT_INTERNAL, EXIT_INTERRUPTED, EXIT_USAGE, EXIT_VERIFIED, Status, Verification
 from .console import clear_progress as _clear_progress
 from .console import progress as _progress
 from .console import say as _say
@@ -103,6 +103,15 @@ def _verify_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-files", action="store_true", help="check only the token; the result cannot be a pass")
     parser.add_argument("--openssl", action="store_true", help="also run openssl ts -verify and report its answer")
     _add_settings_options(parser)
+    _add_no_library_option(parser)
+
+
+def _add_no_library_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--no-library",
+        action="store_true",
+        help="do not record this run in the seal library (EVIDENCE_SEAL_LIBRARY=off does the same for every run)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,6 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     seal.add_argument("--date", help="value for the created field, which is only a claim (default: now)")
     seal.add_argument("--force", action="store_true", help="replace an existing manifest that has no token beside it")
     _add_settings_options(seal)
+    _add_no_library_option(seal)
 
     stamp = commands.add_parser(
         "stamp",
@@ -170,6 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stamp.add_argument("--force", action="store_true", help="replace an existing token, keeping a dated copy of the old one")
     _add_settings_options(stamp)
+    _add_no_library_option(stamp)
 
     verify = commands.add_parser(
         "verify",
@@ -214,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 # Modules that add their own commands. Each has register(commands), which adds its parsers to the
 # subparsers object and returns a dict from command name to handler.
-COMMAND_MODULES: Tuple[str, ...] = ("settings_commands", "authority_commands", "exporting", "comparing")
+COMMAND_MODULES: Tuple[str, ...] = ("settings_commands", "authority_commands", "exporting", "comparing", "library_commands")
 
 
 def _command_modules():
@@ -232,6 +243,8 @@ def _apply_settings(args: argparse.Namespace) -> None:
     """
     chosen = settings.settings_for(args.settings_file, args.profile, args.no_settings)
     args.resolved_settings = chosen
+    if not chosen.library:
+        args.no_library = True
     if args.command == "seal":
         args.settings_excludes = chosen.exclude_items()
         template = chosen.value("purpose")
@@ -338,6 +351,7 @@ def command_seal(args: argparse.Namespace) -> int:
     _print_unmatched(result.unmatched)
     _say("The manifest alone proves no date. To get a timestamp, send its hash to an authority:")
     _say(f"  {_self_command()} stamp {_shown(result.manifest_path)}")
+    library.record_quietly(args.no_library, library.record_seal, result.manifest_path, args.folder)
     return EXIT_VERIFIED
 
 
@@ -402,6 +416,7 @@ def command_stamp(args: argparse.Namespace) -> int:
     _say("Check it any time, offline:")
     token_option = f" --token {_shown(result.token_path)}" if args.out else ""
     _say(f"  {_self_command()} verify {_shown(Path(args.manifest))}{token_option}")
+    library.record_quietly(args.no_library, library.record_stamp, args.manifest, result)
     return EXIT_VERIFIED
 
 
@@ -413,12 +428,19 @@ def _run_verify(args: argparse.Namespace):
         _clear_progress(report)
 
 
+def _record_run(command: str, args: argparse.Namespace, outcome: Verification) -> None:
+    library.record_quietly(
+        args.no_library, library.record_verification, command, outcome, args.manifest, args.token, args.query
+    )
+
+
 def command_verify(args: argparse.Namespace) -> int:
     outcome = _run_verify(args)
     if args.json:
         print(json.dumps(outcome.to_dict(), indent=2))
     else:
         sys.stdout.write(render.render_text(outcome))
+    _record_run("verify", args, outcome)
     return outcome.exit_code
 
 
@@ -461,6 +483,7 @@ def command_report(args: argparse.Namespace) -> int:
     if target is not None:
         _say(f"Report: {target}")
         _say(f"Result: {outcome.overall}")
+    _record_run("report", args, outcome)
     return outcome.exit_code
 
 

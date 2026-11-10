@@ -164,7 +164,8 @@ class WalkResult:
     excluded_folders: Set[str] = field(default_factory=set)
 
 
-def _is_link(entry: "os.DirEntry[str]", info: os.stat_result) -> bool:
+def is_link(entry: "os.DirEntry[str]", info: os.stat_result) -> bool:
+    """A symbolic link, or on Windows a junction or mount point, which a walk must not follow."""
     if entry.is_symlink():
         return True
     tag = getattr(info, "st_reparse_tag", 0)
@@ -209,7 +210,7 @@ def walk(root: Path, excludes: Excludes) -> WalkResult:
                 else:
                     result.errors.append((relative, exc.strerror or str(exc)))
                 continue
-            link = _is_link(entry, info)
+            link = is_link(entry, info)
             if not link and stat.S_ISDIR(info.st_mode):
                 if excludes.can_skip_folder(relative):
                     result.excluded.append(relative)
