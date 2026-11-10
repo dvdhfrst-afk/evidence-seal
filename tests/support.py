@@ -2,12 +2,16 @@
 
 import contextlib
 import io
+import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from evidence_seal import cli, openssl_bridge
+from evidence_seal import cli, home, openssl_bridge
+
+# tests/__init__.py gives every run a home folder of its own; this makes sure of it for a test run alone.
+assert os.environ.get(home.ENVIRONMENT_VARIABLE), "the tests must not use a real evidence-seal home folder"
 
 ROOT_OF_REPO = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"

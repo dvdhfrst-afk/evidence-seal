@@ -23,10 +23,12 @@ TOP_FILES = (
 TEXT_SUFFIXES = {".py", ".md", ".toml", ".sh"}
 SOURCE_DIRS = ("evidence_seal", "tests", "docs", "examples")
 ALLOWED_IMPORTS = {
-    "argparse", "ast", "base64", "contextlib", "dataclasses", "datetime", "enum", "errno", "fnmatch", "glob", "hashlib",
-    "html", "http", "io", "json", "os", "pathlib", "random", "re", "secrets", "shlex", "shutil", "signal", "socket",
-    "ssl", "stat", "subprocess", "sys", "tempfile", "threading", "time", "traceback", "typing", "unicodedata",
-    "unittest", "urllib", "evidence_seal", "tests", "__future__",
+    "argparse", "ast", "atexit", "base64", "binascii", "collections", "configparser", "contextlib", "csv",
+    "dataclasses", "datetime", "enum", "errno", "fnmatch", "functools", "glob", "hashlib", "hmac", "html",
+    "http", "importlib", "io", "itertools", "json", "math", "mimetypes", "os", "pathlib", "random", "re",
+    "secrets", "shlex", "shutil", "signal", "socket", "socketserver", "sqlite3", "ssl", "stat", "string",
+    "struct", "subprocess", "sys", "tempfile", "textwrap", "threading", "time", "traceback", "typing",
+    "unicodedata", "unittest", "urllib", "uuid", "xml", "zlib", "__future__", "evidence_seal", "tests",
 }
 
 

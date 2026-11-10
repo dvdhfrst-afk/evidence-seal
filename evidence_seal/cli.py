@@ -6,24 +6,30 @@ import argparse
 import errno
 import json
 import os
+import importlib
 import sys
-import time
 import traceback
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import __version__, render, reporting, scan, sealing, showing, stamping, trust, verification
 from .errors import DerError, EvidenceSealError, TokenFormatError, UsageError
 from .manifest import MAX_SIDE_FILE_BYTES, read_limited
 from .results import EXIT_FAILED, EXIT_INTERNAL, EXIT_INTERRUPTED, EXIT_USAGE, EXIT_VERIFIED, Status
-from .text import count_of, printable
+from .console import clear_progress as _clear_progress
+from .console import progress as _progress
+from .console import say as _say
+from .console import self_command as _self_command
+from .console import shown as _shown
+from .console import warn as _warn
+from .console import write_utf8 as _write_utf8
+from .text import count_of
 from .trust import TrustStore
 
 EXIT_CODES_HELP = (
     "exit codes: 0 VERIFIED, 1 FAILED, 2 bad arguments or an unreadable file (no verdict),"
     " 3 INCOMPLETE (not a pass), 4 a bug in this tool (no verdict), 130 interrupted"
 )
-_PROGRESS_SECONDS = 1.0
 
 
 class _ExcludeAction(argparse.Action):
@@ -186,52 +192,18 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--format", choices=("text", "html"), default="text", help="report format (default: %(default)s)")
     report.add_argument("--out", help="report path, or - for standard output (default: beside the manifest)")
     report.add_argument("--force", action="store_true", help="replace an existing report")
+    for module in _command_modules():
+        COMMANDS.update(module.register(commands))
     return parser
 
 
-def _say(text: str = "") -> None:
-    print(printable(text))
+# Modules that add their own commands. Each has register(commands), which adds its parsers to the
+# subparsers object and returns a dict from command name to handler.
+COMMAND_MODULES: Tuple[str, ...] = ()
 
 
-def _warn(text: str) -> None:
-    print(printable(text), file=sys.stderr)
-
-
-def _size_text(count: float) -> str:
-    for unit in ("bytes", "KB", "MB", "GB"):
-        if count < 1024:
-            return f"{count:.0f} {unit}" if unit == "bytes" else f"{count:.1f} {unit}"
-        count /= 1024
-    return f"{count:.1f} TB"
-
-
-def _progress(verb: str) -> Optional[Callable[[scan.Meter], None]]:
-    """A line that updates on a terminal, so a long run does not look stuck. Never written into pipes or files."""
-    try:
-        if not sys.stderr.isatty():
-            return None
-    except (AttributeError, ValueError):
-        return None
-    last = [time.monotonic()]
-
-    def show(meter: scan.Meter) -> None:
-        now = time.monotonic()
-        if now - last[0] < _PROGRESS_SECONDS:
-            return
-        last[0] = now
-        sys.stderr.write(
-            f"\r{verb} {meter.files} of {meter.total_files} files,"
-            f" {_size_text(meter.bytes)} of {_size_text(meter.total_bytes)}   "
-        )
-        sys.stderr.flush()
-
-    return show
-
-
-def _clear_progress(report: Optional[Callable[[scan.Meter], None]]) -> None:
-    if report is not None:
-        sys.stderr.write("\r" + " " * 70 + "\r")
-        sys.stderr.flush()
+def _command_modules():
+    return [importlib.import_module(f".{name}", __package__) for name in COMMAND_MODULES]
 
 
 def _options(args: argparse.Namespace, report=None) -> verification.VerifyOptions:
@@ -285,12 +257,6 @@ def _print_unmatched(rules: List[scan.ExcludeRule]) -> None:
             _say(f"  {rule.text} ({rule.source})")
 
 
-def _self_command() -> str:
-    """How this copy was started, so a suggested command works when pasted."""
-    name = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else ""
-    return "python -m evidence_seal" if name in ("__main__.py", "-m") else "evidence-seal"
-
-
 def command_seal(args: argparse.Namespace) -> int:
     rules = _exclude_rules(args)
     if args.dry_run:
@@ -314,10 +280,6 @@ def command_seal(args: argparse.Namespace) -> int:
     _say("The manifest alone proves no date. To get a timestamp, send its hash to an authority:")
     _say(f"  {_self_command()} stamp {_shown(result.manifest_path)}")
     return EXIT_VERIFIED
-
-
-def _shown(path: Path) -> str:
-    return reporting.quote_argument(str(path))
 
 
 def command_stamp(args: argparse.Namespace) -> int:
@@ -393,17 +355,6 @@ def command_show(args: argparse.Namespace) -> int:
     return EXIT_VERIFIED if facts["granted"] and facts["time"] else EXIT_FAILED
 
 
-def _write_utf8(text: str) -> None:
-    """Sends UTF-8 whatever this console uses, because an HTML report says that is what it holds."""
-    buffer = getattr(sys.stdout, "buffer", None)
-    if buffer is None:
-        sys.stdout.write(text)
-        return
-    sys.stdout.flush()
-    buffer.write(text.encode("utf-8"))
-    buffer.flush()
-
-
 def command_report(args: argparse.Namespace) -> int:
     target = None
     if args.out != "-":
@@ -435,7 +386,7 @@ def command_report(args: argparse.Namespace) -> int:
     return outcome.exit_code
 
 
-COMMANDS = {
+COMMANDS: Dict[str, Callable[[argparse.Namespace], int]] = {
     "seal": command_seal,
     "stamp": command_stamp,
     "verify": command_verify,
