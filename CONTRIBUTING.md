@@ -23,8 +23,9 @@ the other system does not have. A change to how files are walked or named should
 
 - Standard library only, and syntax that Python 3.9 can read.
 - Python sources are plain ASCII, and every text file uses line feeds.
-- Network code lives only in `stamping.py`, which asks authorities for tokens, and `local_server.py`,
-  the loopback-only local test authority. Other programs start only from `openssl_bridge.py`.
+- Network code lives only in `stamping.py`, which asks authorities for tokens, `local_server.py`,
+  the loopback-only local test authority, and `web/server.py`, the loopback-only web interface.
+  Other programs start only from `openssl_bridge.py`.
 - No private keys and no email addresses in any file, including inside certificates in fixtures.
 - Every command in the documents parses, and no document chains commands on one line.
 

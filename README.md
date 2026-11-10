@@ -337,6 +337,13 @@ python -m evidence_seal stamp examples/my-work-manifest-offline.txt --authority 
 python -m evidence_seal verify examples/my-work-manifest-offline.txt
 ```
 
+### A web interface
+
+**`serve`** opens a web interface and JSON API to the seal library, on this computer only: browse,
+verify, seal, stamp, check files you were given, and compare. It listens on a loopback address and
+prints an address carrying a fresh access key. [docs/WEB.md](docs/WEB.md) describes the pages, the
+API and the security model.
+
 ## Moving a seal to another computer
 
 Copy the folder, the manifest and at least the `.tsr`. A manifest made on Windows has the same bytes as
@@ -537,7 +544,7 @@ repeat run put the time in reading files. The cause of the slow first read was n
 |---|---|
 | `evidence_seal/cli.py`, `console.py`, `home.py` | Arguments, exit codes, plain error messages, safe printing, and the folder for the tool's own files |
 | `evidence_seal/sealing.py`, `scan.py`, `manifest.py` | The seal command, safe file writing, walking and hashing, and manifest formats |
-| `evidence_seal/stamping.py` | The stamp command, and the only code that connects out |
+| `evidence_seal/stamping.py` | The stamp command, and the only outgoing network code |
 | `evidence_seal/settings.py`, `settings_commands.py` | The settings file, profiles, and the config and profile commands |
 | `evidence_seal/authorities.py`, `authority_commands.py` | The authority list and its commands |
 | `evidence_seal/issuing.py`, `local_authority.py`, `local_server.py` | Building certificates and tokens, and the local test authority |
@@ -546,6 +553,7 @@ repeat run put the time in reading files. The cause of the slow first read was n
 | `evidence_seal/showing.py`, `render.py`, `reporting.py`, `text.py` | Text, HTML and JSON output, the `openssl` commands, and safe display |
 | `evidence_seal/report_formats.py`, `pdf.py` | The table of report formats, the formats beyond text and HTML, and a small PDF writer |
 | `evidence_seal/exporting.py`, `comparing.py` | The export and diff commands |
+| `evidence_seal/web/` | The serve command: a loopback-only web interface and JSON API |
 | `evidence_seal/der.py`, `tsp.py`, `cms.py`, `x509.py` | Binary formats |
 | `evidence_seal/rsa.py`, `ecdsa.py`, `signatures.py`, `hashes.py`, `oids.py` | Cryptographic checks and names |
 | `evidence_seal/chain.py`, `trust.py`, `openssl_bridge.py` | Certificate paths, trusted roots, and calling `openssl` |

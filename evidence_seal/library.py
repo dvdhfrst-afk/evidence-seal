@@ -12,9 +12,10 @@ The library writes only inside that folder. It never moves, changes or deletes a
 Other parts of evidence-seal use it through:
 
 - ``recording_wanted(no_library)``: the one place that decides whether a command records.
-- ``record_quietly(no_library, action, *arguments)``: runs ``record_seal``, ``record_stamp`` or
-  ``record_verification`` and turns any library problem into one warning line on standard error, so
-  the command's result, output and exit code never change.
+- ``record_quietly(no_library, action, *arguments, notify=warn)``: runs ``record_seal``,
+  ``record_stamp`` or ``record_verification`` and turns any library problem into one warning line,
+  on standard error unless ``notify`` sends it elsewhere, so the command's result, output and exit
+  code never change.
 - ``open_library(create)`` and the ``Library`` methods, for reading and changing what is recorded.
   Notes are append-only: ``add_note``, ``withdraw_note`` and ``notes``, with ``check_note_text``.
   ``last_change`` is the time of the newest thing recorded.
@@ -1103,15 +1104,21 @@ class Library:
 # Recording from the commands ----------------------------------------------------------------------
 
 
-def record_quietly(no_library: bool, action: Callable[..., Any], *arguments: Any) -> None:
-    """Records into the library if wanted. A problem becomes one warning line and changes nothing else."""
+def record_quietly(
+    no_library: bool, action: Callable[..., Any], *arguments: Any, notify: Callable[[str], None] = warn
+) -> bool:
+    """Records into the library if wanted. A problem becomes one warning line and changes nothing else.
+
+    Returns whether the run was recorded."""
     if not recording_wanted(no_library):
-        return
+        return False
     try:
         action(*arguments)
     except Exception as exc:
         reason = str(exc) if isinstance(exc, EvidenceSealError) else f"{type(exc).__name__}: {exc}"
-        warn(f"warning: the seal library did not record this run: {reason}. Nothing else was affected.")
+        notify(f"warning: the seal library did not record this run: {reason}. Nothing else was affected.")
+        return False
+    return True
 
 
 def read_token_files(token_path: Path, query_path: Optional[Path] = None) -> Tuple[bytes, Optional[bytes], Optional[bytes]]:

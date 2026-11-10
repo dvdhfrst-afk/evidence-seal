@@ -46,8 +46,10 @@ class ServeOptions:
     broken: bool = False
 
 
-def loopback_host(host: str) -> str:
-    """The address to bind, which must be a loopback address. ``localhost`` means 127.0.0.1."""
+def loopback_host(host: str, what: str = "the test authority") -> str:
+    """The address to bind, which must be a loopback address. ``localhost`` means 127.0.0.1.
+
+    ``what`` names the server in the refusal."""
     if host.strip().lower() == "localhost":
         return "127.0.0.1"
     try:
@@ -56,7 +58,7 @@ def loopback_host(host: str) -> str:
         address = None
     if address is None or not address.is_loopback:
         raise UsageError(
-            f"the test authority listens only on this computer, and {host!r} is not a loopback address."
+            f"{what} listens only on this computer, and {host!r} is not a loopback address."
             " Use 127.0.0.1 or ::1"
         )
     return str(address)

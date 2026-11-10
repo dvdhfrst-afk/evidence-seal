@@ -28,7 +28,7 @@ ALLOWED_IMPORTS = {
     "http", "importlib", "io", "ipaddress", "itertools", "json", "math", "mimetypes", "os", "pathlib", "random", "re",
     "secrets", "shlex", "shutil", "signal", "socket", "socketserver", "sqlite3", "ssl", "stat", "string",
     "struct", "subprocess", "sys", "tempfile", "textwrap", "threading", "time", "traceback", "typing",
-    "unicodedata", "unittest", "urllib", "uuid", "xml", "zlib", "__future__", "evidence_seal", "tests",
+    "unicodedata", "unittest", "urllib", "uuid", "webbrowser", "xml", "zlib", "__future__", "evidence_seal", "tests",
 }
 
 
@@ -43,6 +43,11 @@ def repo_files():
 
 def python_files():
     return [path for path in repo_files() if path.suffix == ".py"]
+
+
+def package_files():
+    """The Python files of the evidence_seal package, its subpackages included."""
+    return [path for path in python_files() if path.relative_to(ROOT).parts[0] == "evidence_seal"]
 
 
 def files_kept_in_the_repository():
@@ -87,18 +92,21 @@ class Sources(unittest.TestCase):
                 for name in names:
                     self.assertIn(name.split(".")[0], ALLOWED_IMPORTS, f"{path}: {name}")
 
-    def test_network_code_lives_in_two_modules(self):
-        for path in python_files():
-            if path.parts[-2] != "evidence_seal":
+    def test_network_code_lives_in_three_modules(self):
+        network = ("stamping.py", "local_server.py", "web/server.py")
+        for path in package_files():
+            name = path.relative_to(ROOT / "evidence_seal").as_posix()
+            if name in network:
                 continue
             text = path.read_text(encoding="utf-8")
-            if path.name not in ("stamping.py", "local_server.py"):
-                self.assertNotIn("urllib", text, path.name)
-                self.assertNotIn("socket", text, path.name)
+            for word in ("urllib.request", "urlopen", "http.client", "http.server", "socket"):
+                self.assertNotIn(word, text, name)
+            if "/" not in name:  # The web interface reads addresses with urllib.parse; nothing else needs urllib
+                self.assertNotIn("urllib", text, name)
 
     def test_other_programs_are_started_from_one_module(self):
-        for path in python_files():
-            if path.parts[-2] == "evidence_seal" and path.name != "openssl_bridge.py":
+        for path in package_files():
+            if path.name != "openssl_bridge.py":
                 self.assertNotIn("subprocess", path.read_text(encoding="utf-8"), path.name)
 
     def test_text_files_have_no_long_dashes_and_use_lf(self):

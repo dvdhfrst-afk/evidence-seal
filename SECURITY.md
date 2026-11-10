@@ -15,9 +15,12 @@ files that show the problem. Never send files you are not allowed to share.
 - `stamp` makes one outgoing HTTP or HTTPS request per attempt, to the authority you name or the
   default. The request holds the hash of the manifest, a random nonce and a request for certificates.
   It holds no file names, no file contents and no text from the manifest.
-- Only `test-authority serve` listens on a port, and only on a loopback address (`127.0.0.1` unless
-  you choose another loopback address). Any other address is refused, so nothing on the network can
-  reach it. It runs until you stop it. Nothing else listens, and there is no telemetry.
+- Only `test-authority serve` and `serve` listen on a port, and only on a loopback address (`127.0.0.1`
+  unless you choose another loopback address). Any other address is refused, so nothing on the network
+  can reach them. Each runs until you stop it. Nothing else listens, and there is no telemetry.
+- `serve`, the web interface, needs a fresh random access key on every request, answers only to its
+  own address in the Host header, and refuses changes sent from other web pages. Its security model,
+  and what it does not protect against, are in [docs/WEB.md](docs/WEB.md).
 - `stamp` honors the usual `http_proxy` and `https_proxy` settings, through Python's standard library.
 - `openssl` runs only with `verify --openssl`, or for a curve or extension that pure Python here does
   not cover. It gets files through a private temporary folder. `EVIDENCE_SEAL_OPENSSL` chooses the
@@ -42,6 +45,7 @@ local test authority. These are the defenses, each with tests in `tests/test_hos
 | A token carrying its own fake chain | A chain counts only if it reaches a root you named with `--ca`, a fingerprint built in, or a root you added to your authority list. |
 | A damaged or hand-edited authority list | It is size limited, every field is checked, and each stored root must match the fingerprint recorded for it. Any problem stops the command with a message naming the file. A newer format is refused and never rewritten. |
 | A token from the local test authority presented as evidence | `verify`, `report` and `show` say plainly that it comes from a local test authority and proves nothing to anyone else. Its certificates and key file say TEST ONLY. |
+| A web page or program on this computer that reaches the web interface | Every request needs the access key or a session cookie, the Host header must name the served address, and a change needs a POST with a form token and a same-origin Origin. Bodies, uploads, headers and jobs are bounded. Tested in `tests/test_web_security.py`. |
 | Hostile requests to the local test authority | Bodies over 64 KB are refused unread, slow clients are dropped after 10 seconds, and request bytes are parsed strictly and refused as RFC 3161 says. |
 | A token signed with a weak hash or a short key | NOT CHECKED, even when the arithmetic works. |
 | Bytes built to break a parser: nesting, wrong lengths, truncation | The DER (Distinguished Encoding Rules) parser limits depth and checks every length. Damage ends in a verdict or a plain error, tested with random damage. |
