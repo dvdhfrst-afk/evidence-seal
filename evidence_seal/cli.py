@@ -210,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 # Modules that add their own commands. Each has register(commands), which adds its parsers to the
 # subparsers object and returns a dict from command name to handler.
-COMMAND_MODULES: Tuple[str, ...] = ()
+COMMAND_MODULES: Tuple[str, ...] = ("library_commands",)
 
 
 def _command_modules():
