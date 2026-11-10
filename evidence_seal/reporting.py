@@ -1,4 +1,9 @@
-"""The report command: one page a lawyer or reviewer can read and check independently."""
+"""The report command: one page a lawyer or reviewer can read and check independently.
+
+This module holds what every report format shares (the claims, the results, the openssl commands
+and what the proof does and does not show) and the text and HTML pages. report_formats.py holds
+the other formats and the table of all of them.
+"""
 
 from __future__ import annotations
 
@@ -8,12 +13,10 @@ import re
 import shlex
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 from . import der, render
 from .results import Verification
-from .sealing import REPORT_HTML_SUFFIX, REPORT_TEXT_SUFFIX
 from .text import printable, printable_block
 from .trust import authority_for_root
 from .x509 import Certificate
@@ -33,7 +36,6 @@ DEPENDS_ON = (
     "This is a technical summary and not legal advice. Whether it is admissible or persuasive is for a lawyer to judge.",
 )
 # The formats the report command writes. The first is the default.
-REPORT_FORMATS: Tuple[str, ...] = ("text", "html")
 # Safe bare in sh, cmd.exe and PowerShell alike. A backslash only counts as plain where it separates folders.
 _PLAIN_ARGUMENT = re.compile(r"^[A-Za-z0-9_./:=+\\-]+$" if os.name == "nt" else r"^[A-Za-z0-9_./:=+-]+$")
 # Safe inside double quotes in all three. Letters and digits of any script, plus a few marks.
@@ -162,7 +164,7 @@ def _token_epoch(verification: Verification) -> Optional[int]:
     return der.epoch_seconds(moment)
 
 
-def _result_rows(verification: Verification) -> List[Tuple[str, str, str]]:
+def result_rows(verification: Verification) -> List[Tuple[str, str, str]]:
     rows = []
     for check in verification.checks:
         detail = check.detail
@@ -172,7 +174,7 @@ def _result_rows(verification: Verification) -> List[Tuple[str, str, str]]:
     return rows
 
 
-def _claim_rows(verification: Verification, context: ReportContext) -> List[Tuple[str, str]]:
+def claim_rows(verification: Verification, context: ReportContext) -> List[Tuple[str, str]]:
     rows: List[Tuple[str, str]] = [("Manifest", f"{context.manifest_file}, {verification.manifest_kind} format")]
     rows.append(("Manifest SHA-256", verification.manifest_sha256))
     if verification.purpose:
@@ -199,9 +201,9 @@ def render_report_text(verification: Verification, context: ReportContext) -> st
     if verification.test_authority_warning():
         lines.append(verification.test_authority_warning())
     lines.extend(["", "WHAT IS CLAIMED"])
-    lines.extend(f"  {label}: {value}" for label, value in _claim_rows(verification, context))
+    lines.extend(f"  {label}: {value}" for label, value in claim_rows(verification, context))
     lines.extend(["", "RESULTS OF THIS CHECK (each one separate)"])
-    for title, word, detail in _result_rows(verification):
+    for title, word, detail in result_rows(verification):
         lines.append(f"  [{word}] {title}: {detail}")
     if verification.notes:
         lines.extend(["", "NOTES"])
@@ -268,10 +270,10 @@ def render_report_html(verification: Verification, context: ReportContext) -> st
     parts += [
         "<h2>What is claimed</h2><table>",
     ]
-    for label, value in _claim_rows(verification, context):
+    for label, value in claim_rows(verification, context):
         parts.append(f"<tr><th>{e(label)}</th><td>{e(value)}</td></tr>")
     parts.append("</table><h2>Results of this check (each one separate)</h2><table>")
-    for title, word, detail in _result_rows(verification):
+    for title, word, detail in result_rows(verification):
         css = word.replace(" ", "-")
         parts.append(f'<tr><th>{e(title)}</th><td><span class="{css}">{e(word)}</span>: {e(detail)}</td></tr>')
     parts.append("</table>")
@@ -291,7 +293,3 @@ def render_report_html(verification: Verification, context: ReportContext) -> st
     parts.append("</body></html>")
     return "\n".join(parts) + "\n"
 
-
-def default_report_path(manifest_path: Path, fmt: str) -> Path:
-    suffix = REPORT_HTML_SUFFIX if fmt == "html" else REPORT_TEXT_SUFFIX
-    return Path(manifest_path).with_suffix(suffix)

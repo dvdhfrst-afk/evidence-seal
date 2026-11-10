@@ -258,8 +258,8 @@ issued again.
 **`verify MANIFEST`** finds the `.tsr` beside the manifest, or use `--token`. A native manifest finds
 its folder by the name it records, beside the manifest or as the folder holding it. A hand-made one
 uses the folder holding the manifest. `--folder` overrides both. If the manifest is inside the folder
-being checked, exactly its own companions (`.tsr`, `.tst`, `.tsq`, `.ca.crt`, `.report.txt`,
-`.report.html`, and copies kept by `--force`) and the files named in the command are not compared, and
+being checked, exactly its own companions (`.tsr`, `.tst`, `.tsq`, `.ca.crt`, the file of every report
+format, and copies kept by `--force`) and the files named in the command are not compared, and
 the output lists them.
 
 - `--allow-added`: new files alone do not fail the file check. They are still listed.
@@ -274,7 +274,8 @@ the output lists them.
 **`show TOKEN`** prints what a token says in plain language, checks nothing, and says so.
 
 **`report MANIFEST`** runs the same checks as `verify` with the same options and exit codes, and
-writes one page of text, or HTML with `--format html`. `--out -` prints it instead.
+writes one page of text, or with `--format` HTML, JSON, Markdown, CSV, JUnit XML or PDF.
+`--out -` prints it instead. [docs/REPORTS.md](docs/REPORTS.md) describes each format.
 
 ## Moving a seal to another computer
 
@@ -479,11 +480,13 @@ repeat run put the time in reading files. The cause of the slow first read was n
 | `evidence_seal/stamping.py` | The stamp command, and the only network code |
 | `evidence_seal/verification.py`, `tokencheck.py`, `results.py` | The verify flow, each token check, and verdicts |
 | `evidence_seal/showing.py`, `render.py`, `reporting.py`, `text.py` | Text, HTML and JSON output, the `openssl` commands, and safe display |
+| `evidence_seal/report_formats.py`, `pdf.py` | The table of report formats, the formats beyond text and HTML, and a small PDF writer |
+| `evidence_seal/exporting.py`, `comparing.py` | The export and diff commands |
 | `evidence_seal/der.py`, `tsp.py`, `cms.py`, `x509.py` | Binary formats |
 | `evidence_seal/rsa.py`, `ecdsa.py`, `signatures.py`, `hashes.py`, `oids.py` | Cryptographic checks and names |
 | `evidence_seal/chain.py`, `trust.py`, `openssl_bridge.py` | Certificate paths, trusted roots, and calling `openssl` |
 | `examples/` | A sample folder, a finished seal of it, and worked examples |
-| `docs/` | File formats, and a CI (continuous integration) setup to copy |
+| `docs/` | File formats, report formats, and a CI (continuous integration) setup to copy |
 
 ## Tests
 

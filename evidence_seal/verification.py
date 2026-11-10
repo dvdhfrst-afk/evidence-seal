@@ -13,7 +13,20 @@ from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 from . import __version__, authorities, manifest, scan, sealing, tokencheck
 from .errors import CertificateFileError, UsageError
 from .manifest import Entry, Manifest
-from .results import Check, FileDifferences, Status, Verification
+from .results import (
+    ADDED,
+    CHANGED,
+    MISSING,
+    MOVED,
+    NOT_COMPARED,
+    UNCHANGED,
+    UNREADABLE,
+    Check,
+    FileDifferences,
+    FileRow,
+    Status,
+    Verification,
+)
 from .text import count_of, same_text_form
 from .trust import TrustStore
 from .x509 import Certificate, load_certificates
@@ -110,7 +123,11 @@ def compare_folder(
         same_text_form(name): name for name in walked.files if not name.isascii() and name not in listed
     }
     meter = scan.Meter(report, len(data.entries), data.total_bytes or 0)
+    rows = differences.rows
+    missing_rows: Dict[str, FileRow] = {}
     for entry in data.entries:
+        row = FileRow(entry.path, UNREADABLE, entry.algorithm.display, entry.hexdigest, None, entry.size)
+        rows.append(row)
         relative = _relative_entry_path(entry, folder)
         if relative is None:
             differences.unreadable.append(entry.path)
@@ -122,28 +139,37 @@ def compare_folder(
             found = walked.files[actual]
             expected.add(actual)
             differences.other_unicode_forms[relative] = actual
+            row.found_path = actual
         if found is None:
             differences.missing.append(relative)
             missing_entries[relative] = entry
+            missing_rows[relative] = row
+            row.outcome = MISSING
             continue
         if entry.algorithm.weak:
             weak_seen += 1
         try:
-            if entry.size is not None and found.stat().st_size != entry.size:
+            size = found.stat().st_size
+            if entry.size is not None and size != entry.size:
                 differences.changed.append(relative)
+                row.outcome, row.found_size = CHANGED, size
                 continue
-            digest, _ = scan.hash_file(found, entry.algorithm, meter)
+            digest, row.found_size = scan.hash_file(found, entry.algorithm, meter)
         except OSError:
             differences.unreadable.append(relative)
             continue
         meter.add_file()
+        row.found_hash = digest
         if digest == entry.hexdigest:
             differences.unchanged += 1
+            row.outcome = UNCHANGED
         else:
             differences.changed.append(relative)
+            row.outcome = CHANGED
 
     own = {sealing.path_key(path) for path in own_files}
     extra_rules = scan.Excludes(excludes)
+    added_rows: Dict[str, FileRow] = {}
     for relative, found in walked.files.items():
         if relative in expected or extra_rules.matches(relative):
             continue
@@ -151,20 +177,34 @@ def compare_folder(
             differences.own_files.append(relative)
             continue
         differences.added.append(relative)
+        try:
+            added_rows[relative] = FileRow(relative, ADDED, found_size=found.stat().st_size)
+        except OSError:
+            added_rows[relative] = FileRow(relative, ADDED)
     recorded = {same_text_form(relative) for relative in data.links + data.special}
     for relative in walked.links + walked.special:
         if same_text_form(relative) not in recorded and not extra_rules.matches(relative):
             differences.added.append(relative)
+            added_rows[relative] = FileRow(relative, ADDED)
     present = {same_text_form(relative) for relative in walked.links + walked.special}
     for relative in data.links + data.special:
         if same_text_form(relative) not in present:
             differences.missing.append(relative)
+            rows.append(FileRow(relative, MISSING))
     differences.unreadable.extend(path for path, _ in walked.errors)
+    rows.extend(FileRow(path, UNREADABLE) for path, _ in walked.errors)
     differences.changed.sort(key=scan.sort_key)
     differences.missing.sort(key=scan.sort_key)
     differences.added.sort(key=scan.sort_key)
     differences.own_files.sort(key=scan.sort_key)
     _hint_moves(differences, missing_entries, walked.files)
+    for relative, new_path in differences.moved_hints.items():
+        # One row stands for the missing name and the added name that now holds the same bytes.
+        row = missing_rows[relative]
+        row.outcome, row.found_path, row.found_hash = MOVED, new_path, row.expected_hash
+        row.found_size = added_rows.pop(new_path).found_size if new_path in added_rows else row.expected_size
+    rows.extend(added_rows.values())
+    rows.sort(key=lambda item: scan.sort_key(item.path))
     return _files_check(data, differences, allow_added, weak_seen), differences
 
 
@@ -366,7 +406,15 @@ def verify(options: VerifyOptions) -> Verification:
         checked_at=tokencheck.format_time(now),
         tool_version=__version__,
         test_authority=test_authority,
+        file_rows=differences.rows if differences is not None else _rows_not_compared(data),
     )
+
+
+def _rows_not_compared(data: Manifest) -> List[FileRow]:
+    return [
+        FileRow(entry.path, NOT_COMPARED, entry.algorithm.display, entry.hexdigest, None, entry.size)
+        for entry in data.entries
+    ]
 
 
 def _token_certificates(report: tokencheck.TokenReport) -> List[Certificate]:

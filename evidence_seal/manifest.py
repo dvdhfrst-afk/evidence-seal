@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import hashes
-from .errors import UsageError
+from .errors import ManifestError, UsageError
 from .hashes import HashAlgorithm
 from .scan import sort_key
 
@@ -317,3 +317,21 @@ def read_limited(path, what: str, limit: int = MAX_MANIFEST_BYTES) -> bytes:
 
 def read_manifest(path) -> Manifest:
     return parse(read_limited(path, "manifest"))
+
+
+def sha256_entries(data: Manifest, name: str, command: str) -> List[Entry]:
+    """The entries of a manifest that a SHA-256 list can be made from, or a plain reason why there are none."""
+    if data.newer_version is not None:
+        raise ManifestError(
+            f"{name} uses manifest format v{data.newer_version}, and this version of evidence-seal reads format"
+            f" v{FORMAT_VERSION}. Nothing here is damaged; use a version that reads it"
+        )
+    if not data.entries:
+        raise ManifestError(f"{name} lists no files in a form this tool can read")
+    other = [entry for entry in data.entries if entry.algorithm is not hashes.SHA256]
+    if other:
+        raise ManifestError(
+            f"{command} works with SHA-256 lists, and {name} lists {len(other)} of its files with"
+            f" {other[0].algorithm.display} hashes, such as {other[0].path}"
+        )
+    return data.entries

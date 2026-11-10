@@ -11,7 +11,7 @@ from unittest import mock
 
 import shlex
 
-from evidence_seal import authorities, cli, reporting, settings
+from evidence_seal import authorities, cli, report_formats, reporting, settings
 from evidence_seal.errors import StampError, UsageError
 from tests import test_docs_and_examples as documents
 from tests.support import LOCAL, ROOT_OF_REPO, TempFolderTestCase, run_cli
@@ -186,7 +186,7 @@ class Problems(SettingsCase):
             ("allow-added = true", "allow-added in [defaults]: must be yes or no, not 'true'"),
             ("openssl = on", "must be yes or no"),
             ("library = yes", "library in [defaults]: must be on or off"),
-            ("report-format = pdf", "report-format in [defaults]: must be one of text, html"),
+            ("report-format = docx", "report-format in [defaults]: must be one of text, html, json, markdown, csv, junit, pdf"),
             ("purpose = {nope}", "may use {folder} and {date} only, not {nope}"),
             ("purpose = {date:%Y}", "may use {folder} and {date} only"),
             ("purpose = {0}", "may use {folder} and {date} only"),
@@ -775,7 +775,7 @@ class Precedence(SettingsCase):
 
     def test_report_takes_its_format(self):
         self.assertEqual(settings.KEYS["report-format"].check("html", self.temp), "html")
-        self.assertEqual(reporting.REPORT_FORMATS[0], settings.built_in("report-format"))
+        self.assertEqual(report_formats.FORMAT_NAMES[0], settings.built_in("report-format"))
         self.write_settings(ini("[defaults]", f"ca = {SEALED_ROOT}", "[profile pages]", "report-format = html"))
         out = self.ok("report", SEALED_MANIFEST, "--folder", MY_WORK, "--out", "-", "--profile", "pages")
         self.assertIn("<html", out)

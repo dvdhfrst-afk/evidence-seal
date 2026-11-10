@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import __version__, authorities, render, reporting, scan, sealing, settings, showing, stamping, trust, verification
+from . import __version__, authorities, render, report_formats, reporting, scan, sealing, settings, showing, stamping, trust, verification
 from .errors import DerError, EvidenceSealError, TokenFormatError, UsageError
 from .manifest import MAX_SIDE_FILE_BYTES, read_limited
 from .results import EXIT_FAILED, EXIT_INTERNAL, EXIT_INTERRUPTED, EXIT_USAGE, EXIT_VERIFIED, Status
@@ -22,7 +22,7 @@ from .console import say as _say
 from .console import self_command as _self_command
 from .console import shown as _shown
 from .console import warn as _warn
-from .console import write_utf8 as _write_utf8
+from .console import deliver as _deliver
 from .text import count_of
 from .trust import TrustStore
 
@@ -41,7 +41,7 @@ class _ExcludeAction(argparse.Action):
         setattr(namespace, self.dest, items)
 
 
-def _add_exclude_options(parser: argparse.ArgumentParser, pattern_help: str) -> None:
+def add_exclude_options(parser: argparse.ArgumentParser, pattern_help: str) -> None:
     parser.add_argument("--exclude", action=_ExcludeAction, dest="exclude", default=[], metavar="PATTERN", help=pattern_help)
     parser.add_argument(
         "--exclude-from",
@@ -52,7 +52,7 @@ def _add_exclude_options(parser: argparse.ArgumentParser, pattern_help: str) -> 
     )
 
 
-def _exclude_rules(args: argparse.Namespace) -> List[Tuple[str, str]]:
+def exclude_rules(args: argparse.Namespace) -> List[Tuple[str, str]]:
     """Patterns from the settings come first, so a pattern given here, such as !name, can undo one of them."""
     rules: List[Tuple[str, str]] = list(getattr(args, "settings_excludes", []))
     for option, value in args.exclude:
@@ -98,7 +98,7 @@ def _verify_arguments(parser: argparse.ArgumentParser) -> None:
         help="extra certificates to build the chain from (not trusted by themselves); can repeat",
     )
     parser.add_argument("--query", type=Path, help="the saved .tsq request (default: the .tsq beside the token)")
-    _add_exclude_options(parser, "do not report new files matching this; sealed files are always checked; can repeat")
+    add_exclude_options(parser, "do not report new files matching this; sealed files are always checked; can repeat")
     parser.add_argument("--allow-added", action="store_true", help="new files alone do not fail the file check")
     parser.add_argument("--skip-files", action="store_true", help="check only the token; the result cannot be a pass")
     parser.add_argument("--openssl", action="store_true", help="also run openssl ts -verify and report its answer")
@@ -126,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     seal.add_argument(
         "--purpose", help="why this seal is being made, in your words; required unless --dry-run or the settings give a purpose"
     )
-    _add_exclude_options(seal, "leave out matching files, or put them back with a leading !; can repeat")
+    add_exclude_options(seal, "leave out matching files, or put them back with a leading !; can repeat")
     seal.add_argument("--dry-run", action="store_true", help="show what would be sealed and left out; opens and writes nothing")
     seal.add_argument("--out", type=Path, help="manifest path (default: beside the folder)")
     seal.add_argument("--date", help="value for the created field, which is only a claim (default: now)")
@@ -200,7 +200,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _verify_arguments(report)
     report.add_argument(
-        "--format", choices=reporting.REPORT_FORMATS, help=f"report format (default: {settings.built_in('report-format')})"
+        "--format",
+        choices=report_formats.FORMAT_NAMES,
+        help="report format: " + "; ".join(f"{item.name}, {item.description}" for item in report_formats.REPORT_FORMATS)
+        + f" (default: {settings.built_in('report-format')})",
     )
     report.add_argument("--out", help="report path, or - for standard output (default: beside the manifest)")
     report.add_argument("--force", action="store_true", help="replace an existing report")
@@ -211,7 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 # Modules that add their own commands. Each has register(commands), which adds its parsers to the
 # subparsers object and returns a dict from command name to handler.
-COMMAND_MODULES: Tuple[str, ...] = ("settings_commands", "authority_commands")
+COMMAND_MODULES: Tuple[str, ...] = ("settings_commands", "authority_commands", "exporting", "comparing")
 
 
 def _command_modules():
@@ -270,7 +273,7 @@ def _options(args: argparse.Namespace, report=None) -> verification.VerifyOption
         ca_files=args.ca,
         untrusted_files=args.untrusted,
         query_path=args.query,
-        excludes=_exclude_rules(args),
+        excludes=exclude_rules(args),
         allow_added=args.allow_added,
         skip_files=args.skip_files,
         cross_check=args.openssl,
@@ -314,7 +317,7 @@ def _print_unmatched(rules: List[scan.ExcludeRule]) -> None:
 
 
 def command_seal(args: argparse.Namespace) -> int:
-    rules = _exclude_rules(args)
+    rules = exclude_rules(args)
     if args.dry_run:
         preview = sealing.preview_folder(args.folder, rules, args.out, args.date)
         _print_preview(preview)
@@ -436,12 +439,13 @@ def command_show(args: argparse.Namespace) -> int:
 
 
 def command_report(args: argparse.Namespace) -> int:
+    chosen = report_formats.by_name(args.format)
     target = None
     if args.out != "-":
-        target = Path(args.out) if args.out else reporting.default_report_path(args.manifest, args.format)
-        inputs = [args.manifest] + ([args.token] if args.token else [sealing.token_path_for(args.manifest)])
-        if any(sealing.path_key(target) == sealing.path_key(path) for path in inputs):
-            raise UsageError(f"the report would overwrite {target}. Choose another name with --out")
+        target = Path(args.out) if args.out else report_formats.default_report_path(args.manifest, chosen.name)
+        token = args.token if args.token else sealing.token_path_for(args.manifest)
+        protected = sealing.files_of(args.manifest, reports=False) + [token] + list(args.ca) + list(args.untrusted)
+        sealing.refuse_to_replace(target, protected + ([args.query] if args.query else []), "the report")
     outcome = _run_verify(args)
     root_file = args.ca[0].name if args.ca else None
     if root_file is None and sealing.root_path_for(args.manifest).is_file():
@@ -453,14 +457,8 @@ def command_report(args: argparse.Namespace) -> int:
         root_file=root_file,
         untrusted_files=tuple(path.name for path in args.untrusted),
     )
-    if args.format == "html":
-        text = reporting.render_report_html(outcome, context)
-    else:
-        text = reporting.render_report_text(outcome, context)
-    if target is None:
-        _write_utf8(text)
-    else:
-        sealing.write_new_file(target, text.encode("utf-8"), force=args.force)
+    _deliver(chosen.render(outcome, context), target, args.force, chosen.binary)
+    if target is not None:
         _say(f"Report: {target}")
         _say(f"Result: {outcome.overall}")
     return outcome.exit_code

@@ -15,14 +15,15 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from . import hashes, manifest, scan
 from .errors import ManifestError, SealError, UsageError
+from .report_formats import REPORT_SUFFIXES
 
 TOKEN_SUFFIX = ".tsr"
 QUERY_SUFFIX = ".tsq"
 ROOT_SUFFIX = ".ca.crt"
-REPORT_TEXT_SUFFIX = ".report.txt"
-REPORT_HTML_SUFFIX = ".report.html"
 OWN_FILES = "the manifest's own files"
-COMPANION_SUFFIXES = (TOKEN_SUFFIX, QUERY_SUFFIX, ROOT_SUFFIX, REPORT_TEXT_SUFFIX, REPORT_HTML_SUFFIX)
+# Every report format's file counts as one of the manifest's own, so a report written inside a sealed folder
+# is never sealed, and never reported as an added file.
+COMPANION_SUFFIXES = (TOKEN_SUFFIX, QUERY_SUFFIX, ROOT_SUFFIX) + REPORT_SUFFIXES
 KEPT_MARK = ".replaced-"
 
 
@@ -207,7 +208,7 @@ def token_in_the_way(manifest_path: Path) -> Optional[Path]:
     return None
 
 
-def _sidecar_excludes(folder: Path, manifest_path: Path) -> List[Tuple[str, str]]:
+def own_file_rules(folder: Path, manifest_path: Path) -> List[Tuple[str, str]]:
     """If the manifest lives inside the folder, it and its companions are not part of the seal."""
     try:
         relative = manifest_path.relative_to(folder)
@@ -235,7 +236,7 @@ def _resolve_paths(
     if not folder.is_dir():
         raise UsageError(f"{given} is a file, and seal takes a folder. Put the files you want to seal in a folder")
     manifest_path = Path(out).resolve() if out else default_manifest_path(folder, created_text)
-    return folder, manifest_path, scan.Excludes(list(excludes) + _sidecar_excludes(folder, manifest_path))
+    return folder, manifest_path, scan.Excludes(list(excludes) + own_file_rules(folder, manifest_path))
 
 
 def preview_folder(
@@ -337,9 +338,24 @@ def root_path_for(manifest_path: Path) -> Path:
     return Path(manifest_path).with_suffix(ROOT_SUFFIX)
 
 
-def companion_paths(manifest_path: Path) -> List[Path]:
+def companion_paths(manifest_path: Path, reports: bool = True) -> List[Path]:
     """The exact files this tool writes or looks for beside a manifest, and nothing else."""
     path = Path(manifest_path)
-    found = [path.with_suffix(suffix) for suffix in COMPANION_SUFFIXES]
+    suffixes = COMPANION_SUFFIXES if reports else (TOKEN_SUFFIX, QUERY_SUFFIX, ROOT_SUFFIX)
+    found = [path.with_suffix(suffix) for suffix in suffixes]
     found += [path.with_suffix(".tst"), path.with_name(path.name + TOKEN_SUFFIX)]
     return found
+
+
+def refuse_to_replace(target: Path, protected: Sequence[Path], what: str = "the output") -> None:
+    """Stops before any work when an output file would land on a manifest, a token or another file it needs."""
+    key = path_key(target)
+    for path in protected:
+        if path_key(path) == key:
+            raise UsageError(f"{what} would overwrite {target}. Choose another name with --out")
+
+
+def files_of(manifest_path: Path, reports: bool = True) -> List[Path]:
+    """A manifest, its companions and the copies kept beside it: none of them may be written over by output."""
+    path = Path(manifest_path)
+    return [path] + companion_paths(path, reports) + kept_copies(path)

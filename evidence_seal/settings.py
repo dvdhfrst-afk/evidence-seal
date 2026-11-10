@@ -13,7 +13,7 @@ What other parts of the tool can use:
   ``Resolved.library`` is the on/off switch for recording into the library.
 - ``resolve_authority(value)`` turns an ``authority`` value into a URL, or into the name of an entry in
   the authority list. It is the one place that decides which.
-- ``report-format`` accepts exactly ``reporting.REPORT_FORMATS``.
+- ``report-format`` accepts exactly ``report_formats.FORMAT_NAMES``.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from . import authorities, hashes, home, reporting, scan, sealing, stamping, trust
+from . import authorities, hashes, home, report_formats, scan, sealing, stamping, trust
 from .console import self_command, shown
 from .errors import UsageError
 from .text import printable
@@ -171,8 +171,8 @@ def _choice(*words: str) -> Callable[[str, Path], bool]:
 
 
 def _report_format(value: str, base: Path) -> str:
-    if value not in reporting.REPORT_FORMATS:
-        raise _Bad(f"must be one of {', '.join(reporting.REPORT_FORMATS)}, not {value!r}")
+    if value not in report_formats.FORMAT_NAMES:
+        raise _Bad(f"must be one of {', '.join(report_formats.FORMAT_NAMES)}, not {value!r}")
     return value
 
 
@@ -221,7 +221,7 @@ KEYS: Dict[str, Key] = {
         Key("exclude-from", True, [], _path, is_path=True),
         Key("allow-added", False, False, _choice("yes", "no")),
         Key("openssl", False, False, _choice("yes", "no")),
-        Key("report-format", False, reporting.REPORT_FORMATS[0], _report_format),
+        Key("report-format", False, report_formats.FORMAT_NAMES[0], _report_format),
         Key("purpose", False, None, _purpose),
         Key("library", False, True, _choice("on", "off")),
     )

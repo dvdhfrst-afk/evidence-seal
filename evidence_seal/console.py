@@ -7,7 +7,8 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import reporting, scan
+from . import reporting, scan, sealing
+from .errors import UsageError
 from .text import printable
 
 _PROGRESS_SECONDS = 1.0
@@ -66,6 +67,50 @@ def self_command() -> str:
 
 def shown(path: Path) -> str:
     return reporting.quote_argument(str(path))
+
+
+def _is_terminal() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def write_output(data: bytes, binary: bool = False) -> None:
+    """Sends a finished report or list to standard output.
+
+    Pipes and files get the exact bytes. A terminal gets text made safe one line at a time, because a
+    file name can hold escape codes, and never gets binary data, which would garble it.
+    """
+    if _is_terminal():
+        if binary:
+            raise UsageError("this format is binary and would garble the screen. Use --out FILE, or send it to a file")
+        text = data.decode("utf-8", "surrogateescape").replace("\r\n", "\n")
+        sys.stdout.write("\n".join(printable(line) for line in text.split("\n")))
+        sys.stdout.flush()
+        return
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:
+        if binary:
+            raise UsageError("standard output here cannot take binary data. Use --out FILE")
+        sys.stdout.write(data.decode("utf-8", "surrogateescape"))
+        return
+    sys.stdout.flush()
+    buffer.write(data)
+    buffer.flush()
+
+
+def out_path(text: Optional[str]) -> Optional[Path]:
+    """An --out value as a path, or None for standard output, which no value or - asks for."""
+    return None if text in (None, "-") else Path(text)
+
+
+def deliver(data: bytes, out: Optional[Path], force: bool = False, binary: bool = False) -> None:
+    """Writes to a new file, or to standard output when there is no file name."""
+    if out is None:
+        write_output(data, binary)
+    else:
+        sealing.write_new_file(out, data, force=force)
 
 
 def write_utf8(text: str) -> None:

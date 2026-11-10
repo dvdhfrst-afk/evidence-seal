@@ -21,6 +21,7 @@ DOCUMENTS = [
     "CONTRIBUTING.md",
     "SECURITY.md",
     "docs/FORMAT.md",
+    "docs/REPORTS.md",
     "docs/CI.md",
     "docs/AUTHORITIES.md",
     "examples/README.md",
