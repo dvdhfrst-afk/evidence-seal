@@ -211,6 +211,14 @@ def _make_backup(index_path: Path, version: int, moment: Optional[datetime]) -> 
     return target
 
 
+def _newer(index_path: Path, version: int, known: int) -> NewerLibrary:
+    return NewerLibrary(
+        f"the library index {index_path} uses schema {version}, and this evidence-seal ({__version__}) knows"
+        f" schema {known} at most. It was left exactly as it was. Use the newer evidence-seal that wrote it,"
+        " or run commands with --no-library"
+    )
+
+
 def migrate(
     connection: sqlite3.Connection,
     index_path: Path,
@@ -219,18 +227,17 @@ def migrate(
 ) -> Optional[Path]:
     """Brings the index up to the newest schema in ``migrations``. Returns the backup made, if any."""
     known = _check_steps(migrations)
-    if _user_version(connection) == known:
+    version = _user_version(connection)
+    if version == known:
         return None
+    if version > known:
+        raise _newer(index_path, version, known)  # Before any lock, so nothing is ever written to it
     connection.execute("BEGIN IMMEDIATE")
     backup = None
     try:
         version = _user_version(connection)
         if version > known:
-            raise NewerLibrary(
-                f"the library index {index_path} uses schema {version}, and this evidence-seal ({__version__}) knows"
-                f" schema {known} at most. It was left exactly as it was. Use the newer evidence-seal that wrote it,"
-                " or run commands with --no-library"
-            )
+            raise _newer(index_path, version, known)
         if version == known:
             connection.execute("COMMIT")
             return None

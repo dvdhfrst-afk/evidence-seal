@@ -3,6 +3,7 @@
 import hashlib
 import os
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
@@ -244,6 +245,23 @@ class Migrations(LibraryTestCase):
         self.assertIn("left exactly as it was", message)
         self.assertEqual(self.index.read_bytes(), before)
         self.assertEqual(self.backups(), [])
+
+    def test_read_only_indexes_are_read_and_a_newer_one_is_refused_without_a_lock(self):
+        connection = self.connect()
+        library.migrate(connection, self.index, TEST_STEPS[:1])
+        connection.close()
+        os.chmod(self.index, stat.S_IREAD)
+        self.addCleanup(os.chmod, self.index, stat.S_IREAD | stat.S_IWRITE)
+        code, out, err = run_cli("library", "list")
+        self.assertEqual(code, 0, err)
+        self.assertIn("no seals yet", out)
+        os.chmod(self.index, stat.S_IREAD | stat.S_IWRITE)
+        connection = self.connect()
+        library.migrate(connection, self.index, TEST_STEPS)
+        connection.close()
+        os.chmod(self.index, stat.S_IREAD)
+        with self.assertRaises(NewerLibrary):
+            library.open_library()
 
     def test_a_command_meeting_a_newer_library_still_does_its_job(self):
         connection = self.connect()
