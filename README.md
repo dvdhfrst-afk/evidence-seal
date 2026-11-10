@@ -277,6 +277,66 @@ the output lists them.
 writes one page of text, or with `--format` HTML, JSON, Markdown, CSV, JUnit XML or PDF.
 `--out -` prints it instead. [docs/REPORTS.md](docs/REPORTS.md) describes each format.
 
+**`export MANIFEST`** writes the manifest's file list for other tools: `sha256sum` style (which
+`sha256sum -c` checks inside the folder), BSD style, CSV or JSON. It reads only the manifest.
+
+**`diff OLD NEW`** compares two manifests, or a manifest and a folder as it is now, and lists what is
+unchanged, changed, added, removed and moved. It compares lists only, checks no token and proves no date.
+
+### Keeping track of your seals
+
+Every seal, stamp and verify run is recorded in a library on this computer, with copies of each
+manifest, token, request and root, so you can see what you sealed, when, and whether it still checks
+out. Your own files are never moved or changed. [docs/LIBRARY.md](docs/LIBRARY.md) has the details,
+including what it stores and how to turn it off (`--no-library`, `EVIDENCE_SEAL_LIBRARY=off`, or the
+`library` setting).
+
+| Command | What it does |
+|---|---|
+| `library list` | Every seal with its token time and last result |
+| `library show ID` | One seal: tokens, every check, events |
+| `library import FOLDER --recursive` | Brings in seals made before the library existed |
+| `library verify --all` | Checks every seal again from the library's copies |
+| `library check` | Confirms the library's copies and index are intact |
+| `library tag`, `untag`, `log`, `forget`, `where` | Organize, read the journal, remove, find it |
+
+### Settings, profiles and authorities
+
+A settings file holds the options you would otherwise type every time, with named profiles for
+different jobs (`--profile NAME`). `config` and `profile` change it without losing your comments.
+[docs/SETTINGS.md](docs/SETTINGS.md) lists every key and which value wins.
+
+`authority add` puts an authority you use into a list, with the root certificate you checked, and
+`stamp --authority NAME` uses it. Roots in that list are trusted by `verify` and `report` too.
+[docs/AUTHORITIES.md](docs/AUTHORITIES.md) explains how to add one safely.
+
+### Trying everything offline
+
+`test-authority` runs a timestamp authority on this computer, so you can try every command with no
+network. Its tokens prove nothing to anyone else, and every command that shows one says so.
+
+```bash
+python -m evidence_seal test-authority init
+```
+
+```bash
+python -m evidence_seal test-authority serve
+```
+
+Leave that running, and in a second window:
+
+```bash
+python -m evidence_seal seal examples/my-work --purpose "Trying it offline" --out examples/my-work-manifest-offline.txt
+```
+
+```bash
+python -m evidence_seal stamp examples/my-work-manifest-offline.txt --authority local-test
+```
+
+```bash
+python -m evidence_seal verify examples/my-work-manifest-offline.txt
+```
+
 ## Moving a seal to another computer
 
 Copy the folder, the manifest and at least the `.tsr`. A manifest made on Windows has the same bytes as
@@ -475,9 +535,13 @@ repeat run put the time in reading files. The cause of the slow first read was n
 
 | Path | Job |
 |---|---|
-| `evidence_seal/cli.py` | Arguments, exit codes and plain error messages |
+| `evidence_seal/cli.py`, `console.py`, `home.py` | Arguments, exit codes, plain error messages, safe printing, and the folder for the tool's own files |
 | `evidence_seal/sealing.py`, `scan.py`, `manifest.py` | The seal command, safe file writing, walking and hashing, and manifest formats |
-| `evidence_seal/stamping.py` | The stamp command, and the only network code |
+| `evidence_seal/stamping.py` | The stamp command, and the only code that connects out |
+| `evidence_seal/settings.py`, `settings_commands.py` | The settings file, profiles, and the config and profile commands |
+| `evidence_seal/authorities.py`, `authority_commands.py` | The authority list and its commands |
+| `evidence_seal/issuing.py`, `local_authority.py`, `local_server.py` | Building certificates and tokens, and the local test authority |
+| `evidence_seal/library.py`, `library_commands.py` | The seal library: its index, copies, schema upgrades and commands |
 | `evidence_seal/verification.py`, `tokencheck.py`, `results.py` | The verify flow, each token check, and verdicts |
 | `evidence_seal/showing.py`, `render.py`, `reporting.py`, `text.py` | Text, HTML and JSON output, the `openssl` commands, and safe display |
 | `evidence_seal/report_formats.py`, `pdf.py` | The table of report formats, the formats beyond text and HTML, and a small PDF writer |
@@ -486,7 +550,7 @@ repeat run put the time in reading files. The cause of the slow first read was n
 | `evidence_seal/rsa.py`, `ecdsa.py`, `signatures.py`, `hashes.py`, `oids.py` | Cryptographic checks and names |
 | `evidence_seal/chain.py`, `trust.py`, `openssl_bridge.py` | Certificate paths, trusted roots, and calling `openssl` |
 | `examples/` | A sample folder, a finished seal of it, and worked examples |
-| `docs/` | File formats, report formats, and a CI (continuous integration) setup to copy |
+| `docs/` | File formats, report formats, settings, authorities, the library, and a CI (continuous integration) setup to copy |
 
 ## Tests
 
