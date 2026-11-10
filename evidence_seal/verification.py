@@ -45,7 +45,8 @@ class VerifyOptions:
     report: Optional[Callable[[scan.Meter], None]] = None
 
 
-def _existing_token(manifest_path: Path) -> Optional[Path]:
+def existing_token(manifest_path: Path) -> Optional[Path]:
+    """The token verify uses when none is named: the first of the usual names beside the manifest."""
     candidates = [
         sealing.token_path_for(manifest_path),
         manifest_path.with_name(manifest_path.name + sealing.TOKEN_SUFFIX),
@@ -57,7 +58,8 @@ def _existing_token(manifest_path: Path) -> Optional[Path]:
     return None
 
 
-def _find_folder(data: Manifest, manifest_path: Path, explicit: Optional[Path]) -> Optional[Path]:
+def find_folder(data: Manifest, manifest_path: Path, explicit: Optional[Path]) -> Optional[Path]:
+    """The sealed folder: the one given, else the one the manifest names beside it, else None."""
     if explicit is not None:
         if not Path(explicit).is_dir():
             raise UsageError(f"{explicit} is not a folder")
@@ -247,7 +249,7 @@ def verify(options: VerifyOptions) -> Verification:
     except CertificateFileError as exc:
         raise UsageError(str(exc)) from None
 
-    token_path = Path(options.token_path) if options.token_path else _existing_token(manifest_path)
+    token_path = Path(options.token_path) if options.token_path else existing_token(manifest_path)
     if options.token_path and not Path(options.token_path).is_file():
         raise UsageError(f"token {options.token_path} does not exist")
     query_path = Path(options.query_path) if options.query_path else None
@@ -269,7 +271,7 @@ def verify(options: VerifyOptions) -> Verification:
             f" v{manifest.FORMAT_VERSION}. Use a version of evidence-seal that reads it; nothing here is damaged",
         )
     else:
-        folder = _find_folder(data, manifest_path, options.folder)
+        folder = find_folder(data, manifest_path, options.folder)
         if folder is None:
             files_check = Check(
                 FILES,

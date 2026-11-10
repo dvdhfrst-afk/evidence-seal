@@ -204,7 +204,7 @@ def token_in_the_way(manifest_path: Path) -> Optional[Path]:
     return None
 
 
-def _sidecar_excludes(folder: Path, manifest_path: Path) -> List[Tuple[str, str]]:
+def sidecar_excludes(folder: Path, manifest_path: Path) -> List[Tuple[str, str]]:
     """If the manifest lives inside the folder, it and its companions are not part of the seal."""
     try:
         relative = manifest_path.relative_to(folder)
@@ -232,7 +232,7 @@ def _resolve_paths(
     if not folder.is_dir():
         raise UsageError(f"{given} is a file, and seal takes a folder. Put the files you want to seal in a folder")
     manifest_path = Path(out).resolve() if out else default_manifest_path(folder, created_text)
-    return folder, manifest_path, scan.Excludes(list(excludes) + _sidecar_excludes(folder, manifest_path))
+    return folder, manifest_path, scan.Excludes(list(excludes) + sidecar_excludes(folder, manifest_path))
 
 
 def preview_folder(
