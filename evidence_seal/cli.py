@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import __version__, render, reporting, scan, sealing, showing, stamping, trust, verification
+from . import __version__, render, reporting, scan, sealing, settings, showing, stamping, verification
 from .errors import DerError, EvidenceSealError, TokenFormatError, UsageError
 from .manifest import MAX_SIDE_FILE_BYTES, read_limited
 from .results import EXIT_FAILED, EXIT_INTERNAL, EXIT_INTERRUPTED, EXIT_USAGE, EXIT_VERIFIED, Status
@@ -53,7 +53,8 @@ def _add_exclude_options(parser: argparse.ArgumentParser, pattern_help: str) -> 
 
 
 def _exclude_rules(args: argparse.Namespace) -> List[Tuple[str, str]]:
-    rules: List[Tuple[str, str]] = []
+    """Patterns from the settings come first, so a pattern given here, such as !name, can undo one of them."""
+    rules: List[Tuple[str, str]] = list(getattr(args, "settings_excludes", []))
     for option, value in args.exclude:
         if option == "--exclude-from":
             rules.extend(scan.read_exclude_file(Path(value)))
@@ -64,20 +65,16 @@ def _exclude_rules(args: argparse.Namespace) -> List[Tuple[str, str]]:
     return rules
 
 
-def _positive_seconds(text: str) -> float:
-    try:
-        value = float(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds") from None
-    if not 0 < value < 86400:
-        raise argparse.ArgumentTypeError("must be more than 0 and less than a day, in seconds")
-    return value
-
-
-def _retry_count(text: str) -> int:
-    if not text.isascii() or not text.isdigit() or int(text) > 10:
-        raise argparse.ArgumentTypeError("must be a whole number from 0 to 10")
-    return int(text)
+def _add_settings_options(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "settings", "Options not given here come from the settings file: the chosen profile, then [defaults]."
+    )
+    group.add_argument("--profile", metavar="NAME", help="use this profile from the settings file")
+    which = group.add_mutually_exclusive_group()
+    which.add_argument(
+        "--settings", dest="settings_file", type=Path, metavar="FILE", help="use this settings file instead of the usual one"
+    )
+    which.add_argument("--no-settings", action="store_true", help="ignore the settings file and use built-in defaults")
 
 
 def _verify_arguments(parser: argparse.ArgumentParser) -> None:
@@ -105,6 +102,7 @@ def _verify_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--allow-added", action="store_true", help="new files alone do not fail the file check")
     parser.add_argument("--skip-files", action="store_true", help="check only the token; the result cannot be a pass")
     parser.add_argument("--openssl", action="store_true", help="also run openssl ts -verify and report its answer")
+    _add_settings_options(parser)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -125,12 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
     )
     seal.add_argument("folder", type=Path, help="the folder to seal")
-    seal.add_argument("--purpose", help="why this seal is being made, in your words; required unless --dry-run")
+    seal.add_argument(
+        "--purpose", help="why this seal is being made, in your words; required unless --dry-run or the settings give a purpose"
+    )
     _add_exclude_options(seal, "leave out matching files, or put them back with a leading !; can repeat")
     seal.add_argument("--dry-run", action="store_true", help="show what would be sealed and left out; opens and writes nothing")
     seal.add_argument("--out", type=Path, help="manifest path (default: beside the folder)")
     seal.add_argument("--date", help="value for the created field, which is only a claim (default: now)")
     seal.add_argument("--force", action="store_true", help="replace an existing manifest that has no token beside it")
+    _add_settings_options(seal)
 
     stamp = commands.add_parser(
         "stamp",
@@ -140,26 +141,28 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
     )
     stamp.add_argument("manifest", type=Path, help="the manifest file")
-    stamp.add_argument("--tsa-url", default=trust.DEFAULT_TSA_URL, help="timestamp authority URL (default: %(default)s)")
-    stamp.add_argument("--hash", default="sha256", dest="hash_name", help="sha256, sha384 or sha512 (default: %(default)s)")
+    stamp.add_argument("--tsa-url", help=f"timestamp authority URL (default: {settings.built_in('authority')})")
+    stamp.add_argument("--hash", dest="hash_name", help=f"sha256, sha384 or sha512 (default: {settings.built_in('hash')})")
     stamp.add_argument("--policy", help="ask for this policy OID (object identifier)")
     stamp.add_argument("--out", type=Path, help="token path (default: the manifest's name with .tsr)")
     stamp.add_argument(
         "--timeout",
-        type=_positive_seconds,
-        default=stamping.DEFAULT_TIMEOUT,
+        type=settings.positive_seconds,
         metavar="SECONDS",
-        help="seconds to wait for each attempt (default: %(default)s)",
+        help=f"seconds to wait for each attempt (default: {settings.built_in('timeout')})",
     )
     stamp.add_argument(
         "--retries",
-        type=_retry_count,
-        default=stamping.DEFAULT_RETRIES,
+        type=settings.retry_count,
         metavar="N",
-        help="times to ask again after a network failure or a busy authority, waiting between tries (default: %(default)s)",
+        help=(
+            "times to ask again after a network failure or a busy authority, waiting between tries"
+            f" (default: {settings.built_in('retries')})"
+        ),
     )
     stamp.add_argument("--ca", type=Path, action="append", default=[], metavar="FILE", help="trust this root file for the check")
     stamp.add_argument("--force", action="store_true", help="replace an existing token, keeping a dated copy of the old one")
+    _add_settings_options(stamp)
 
     verify = commands.add_parser(
         "verify",
@@ -189,7 +192,9 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
     )
     _verify_arguments(report)
-    report.add_argument("--format", choices=("text", "html"), default="text", help="report format (default: %(default)s)")
+    report.add_argument(
+        "--format", choices=reporting.REPORT_FORMATS, help=f"report format (default: {settings.built_in('report-format')})"
+    )
     report.add_argument("--out", help="report path, or - for standard output (default: beside the manifest)")
     report.add_argument("--force", action="store_true", help="replace an existing report")
     for module in _command_modules():
@@ -199,11 +204,50 @@ def build_parser() -> argparse.ArgumentParser:
 
 # Modules that add their own commands. Each has register(commands), which adds its parsers to the
 # subparsers object and returns a dict from command name to handler.
-COMMAND_MODULES: Tuple[str, ...] = ()
+COMMAND_MODULES: Tuple[str, ...] = ("settings_commands",)
 
 
 def _command_modules():
     return [importlib.import_module(f".{name}", __package__) for name in COMMAND_MODULES]
+
+
+SETTINGS_COMMANDS = ("seal", "stamp", "verify", "report")
+
+
+def _apply_settings(args: argparse.Namespace) -> None:
+    """Fills in every option not given on the command line: the profile, then [defaults], then built-in values.
+
+    A list given on the command line (--ca, --untrusted) replaces the settings' list. Exclude patterns
+    are the exception: the settings' come first and the command line's are applied after them.
+    """
+    chosen = settings.settings_for(args.settings_file, args.profile, args.no_settings)
+    args.resolved_settings = chosen
+    if args.command == "seal":
+        args.settings_excludes = chosen.exclude_items()
+        template = chosen.value("purpose")
+        if args.purpose is None and template is not None:
+            created = sealing.normalize_created(args.date)
+            folder = Path(args.folder).resolve()
+            args.date = created
+            args.purpose = settings.expand_purpose(str(template), folder.name or ".", created)
+        return
+    args.ca = args.ca or chosen.files("ca")
+    if args.command == "stamp":
+        if args.tsa_url is None:
+            try:
+                args.tsa_url = settings.resolve_authority(str(chosen.value("authority")))
+            except UsageError as exc:
+                raise UsageError(f"{exc} ({chosen['authority'].source()})") from None
+        for name, key in (("hash_name", "hash"), ("policy", "policy"), ("timeout", "timeout"), ("retries", "retries")):
+            if getattr(args, name) is None:
+                setattr(args, name, chosen.value(key))
+        return
+    args.settings_excludes = chosen.exclude_items()
+    args.untrusted = args.untrusted or chosen.files("untrusted")
+    args.allow_added = args.allow_added or bool(chosen.value("allow-added"))
+    args.openssl = args.openssl or bool(chosen.value("openssl"))
+    if args.command == "report" and args.format is None:
+        args.format = chosen.value("report-format")
 
 
 def _options(args: argparse.Namespace, report=None) -> verification.VerifyOptions:
@@ -425,6 +469,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command in SETTINGS_COMMANDS:
+            _apply_settings(args)
         code = COMMANDS[args.command](args)
         sys.stdout.flush()
         return code
