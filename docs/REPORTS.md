@@ -166,7 +166,10 @@ sha256sum -c ../my-work.sha256
 The star before each path asks for binary mode, so no system reads a file as text and changes its
 bytes. A name holding a backslash, a line feed or a carriage return is written the way GNU
 `sha256sum` writes one: the line starts with a backslash, and the name has `\\`, `\n` and `\r` in
-place of those characters. A name that is not valid UTF-8 is written as its original bytes. A name
+place of those characters, and standard error says how many names were written that way. GNU
+`sha256sum -c` reads them. uutils coreutils 0.8, the `sha256sum` on Ubuntu 26.04, skips such lines with
+only a warning and still exits 0, so read its output for every file's `OK`; on Ubuntu,
+`gnusha256sum -c` is the GNU one. A name that is not valid UTF-8 is written as its original bytes. A name
 holding a lone surrogate, which only Windows allows, cannot be named in a checksum list at all; use
 `--format json` or `csv` for such a manifest.
 

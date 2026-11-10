@@ -18,6 +18,25 @@ SHA256SUM = shutil.which("sha256sum")
 ACCENTED = "caf" + chr(0xE9)
 
 
+def gnu_sha256sum():
+    """GNU's sha256sum, which reads escaped names. uutils coreutils 0.8, the default on some Linux
+    systems, skips those lines with only a warning, even the ones it wrote itself."""
+    for name in ("gnusha256sum", "sha256sum"):
+        found = shutil.which(name)
+        if found is None:
+            continue
+        try:
+            version = subprocess.run([found, "--version"], capture_output=True, timeout=20).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if b"GNU coreutils" in version:
+            return found
+    return None
+
+
+GNU_SHA256SUM = gnu_sha256sum()
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -150,14 +169,21 @@ class Export(TempFolderTestCase):
     def test_names_with_backslashes_and_line_feeds_use_the_gnu_escape(self):
         rows = [("plain.txt", digest(b"p"), 1), ("back\\slash.txt", digest(b"b"), 1), ("two\nlines\r.txt", digest(b"t"), 1)]
         path = self.write("odd.txt", manifest.render(rows, "p", "2026-01-01", "odd"))
-        code, out, _ = self.export(path=path)
+        code, out, err = self.export(path=path)
         self.assertEqual(code, 0)
         lines = out.split("\n")
         self.assertIn(f"\\{digest(b'b')} *back\\\\slash.txt", lines)
         self.assertIn(f"\\{digest(b't')} *two\\nlines\\r.txt", lines)
         self.assertIn(f"{digest(b'p')} *plain.txt", lines)
-        _, out, _ = self.export("--format", "bsd", path=path)
+        self.assertIn("2 names holding a backslash", err)
+        self.assertIn("make sure every file is reported OK", err)
+        _, out, err = self.export("--format", "bsd", path=path)
         self.assertIn(f"\\SHA256 (back\\\\slash.txt) = {digest(b'b')}", out.split("\n"))
+        self.assertIn("2 names holding a backslash", err)
+        _, _, err = self.export("--format", "json", path=path)
+        self.assertNotIn("backslash", err)
+        _, _, err = self.export()
+        self.assertNotIn("backslash", err)
 
     def test_csv_cells_cannot_run_as_formulas(self):
         rows = [("=1+2", digest(b"a"), 1), ("@x", digest(b"b"), 1), ("'quoted", digest(b"c"), 1), ("a\tb", digest(b"d"), 1)]
@@ -201,7 +227,7 @@ class Export(TempFolderTestCase):
         done = subprocess.run([SHA256SUM, "-c", str(target)], cwd=str(folder), capture_output=True)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
-    @unittest.skipUnless(SHA256SUM and os.name != "nt", "needs sha256sum and a system whose names can hold these")
+    @unittest.skipUnless(GNU_SHA256SUM and os.name != "nt", "needs GNU sha256sum and a system whose names can hold these")
     def test_sha256sum_checks_names_with_backslashes_and_line_feeds(self):
         folder = self.temp / "odd"
         for name in ("back\\slash.txt", "two\nlines.txt", "plain.txt"):
@@ -211,7 +237,7 @@ class Export(TempFolderTestCase):
         for form in ("sha256sum", "bsd"):
             target = self.temp / f"odd-{form}.txt"
             self.assertEqual(self.export("--format", form, "--out", target, path=out)[0], 0)
-            done = subprocess.run([SHA256SUM, "-c", str(target)], cwd=str(folder), capture_output=True)
+            done = subprocess.run([GNU_SHA256SUM, "-c", str(target)], cwd=str(folder), capture_output=True)
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             self.assertEqual(done.stdout.count(b": OK"), 3)
 

@@ -471,14 +471,22 @@ this, since there are no secrets for a timing attack to find. `openssl` is found
 
 ## What has been tested
 
-Everything here was run on 2026-11-07 on one Windows computer: Windows 11 Pro on NTFS, and Ubuntu 26.04
-on ext4 under WSL 2 (Windows Subsystem for Linux). Nobody else has run these numbers yet.
+Everything here was run on one Windows computer: Windows 11 Pro on NTFS, and Ubuntu 26.04 on ext4 under
+WSL 2 (Windows Subsystem for Linux). The test suite was run on 2026-11-09 with version 1.1.0; everything
+after it was run on 2026-11-07 with version 1.0.0, before the library, settings, authority list, report
+formats and web interface existed. Nobody else has run these numbers yet.
 
-**The test suite.** 416 tests pass on Windows with Python 3.9.25, 3.11, 3.12.10 and 3.14, and on Linux
-with Python 3.9.25 and 3.14.4 as a normal user. Nine skip on Windows, each because it needs something
+**The test suite.** 877 tests pass on Windows with Python 3.9.25, and on Linux with Python 3.9.25 and
+3.14.4 as a normal user; `check.sh` passes on both. 15 skip on Windows, each because it needs something
 Windows lacks here: POSIX (Portable Operating System Interface) signals and file modes, names Windows
-cannot hold, or permission to create links. Those nine run on Linux, including both link tests. Three
-skip on Linux, because they test Windows paths, and those run on Windows.
+cannot hold, permission to create links, or the `qpdf` program for a second opinion on PDF files. 5 skip
+on Linux: four test Windows paths and device names, and one needs `qpdf`. Without `openssl` and `git`
+on the path, 18 more skip on Windows and 19 more on Linux, because they compare results against those
+programs; the rest still pass.
+
+**The web interface** was opened once in a browser, on Windows: the seal list and a seal's page showed
+as intended. Every other page and the whole API (application programming interface) are covered only by
+the test suite, which talks to a real server on a loopback address.
 
 **Seals moving between systems.** A folder of 13 awkward files (both Unicode forms of a name, CRLF, LF
 and CR line endings, `aux.txt`, a path over 260 characters, several non-Latin scripts) was tried both ways:

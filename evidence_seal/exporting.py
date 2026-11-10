@@ -44,6 +44,10 @@ def _gnu_escaped(name: bytes) -> Tuple[bytes, bytes]:
     return b"\\", name.replace(b"\\", b"\\\\").replace(b"\n", b"\\n").replace(b"\r", b"\\r")
 
 
+def _escapes(path: str) -> bool:
+    return any(character in path for character in "\\\n\r")
+
+
 def _sha256sum(entries: List[Entry]) -> bytes:
     lines = []
     for entry in entries:
@@ -104,6 +108,13 @@ def command_export(args: argparse.Namespace) -> int:
         warn(f"warning: {count_of(data.unreadable_lines, 'line')} of {name} could not be read as hash lines and were not exported")
     if data.links or data.special:
         warn(f"Not exported: {count_of(len(data.links) + len(data.special), 'link or special file')}, listed by name only")
+    escaped = sum(1 for entry in data.entries if _escapes(entry.path)) if args.format in ("sha256sum", "bsd") else 0
+    if escaped:
+        warn(
+            f"{count_of(escaped, 'name')} holding a backslash, a line feed or a carriage return"
+            " were written escaped, the way GNU sha256sum writes them. Some other checkers skip such lines"
+            " with only a warning, so make sure every file is reported OK"
+        )
     if args.format in ("csv", "json") and data.total_bytes is None:
         warn(f"{name} is hand-made and does not record every size, so those sizes are left empty")
     warn("This list comes from the manifest alone. It checks no token and proves no date.")
