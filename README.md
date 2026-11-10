@@ -266,7 +266,7 @@ the output lists them.
 - `--exclude PATTERN`, `--exclude-from FILE`: do not report new files matching this. Files in the manifest
   are always checked.
 - `--skip-files`: check the token only. The result can then be at best INCOMPLETE.
-- `--ca FILE`: trust this root certificate instead of the built-in fingerprints.
+- `--ca FILE`: trust only this root certificate, instead of the built-in fingerprints and your authority list.
 - `--untrusted FILE`: extra certificates to build the chain from, for tokens that do not carry them.
 - `--query FILE`: compare against a saved request. A `.tsq` beside the token is used automatically.
 - `--openssl`: also run `openssl ts -verify` and report its answer as one more check.
@@ -318,12 +318,17 @@ is safe to delete.
 ## Who is trusted
 
 A token carries its own certificates, so a forger can include a whole fake chain. The chain therefore
-proves nothing until it reaches a root chosen from outside the token. There are exactly two ways to
-do that:
+proves nothing until it reaches a root chosen from outside the token. There are exactly three ways
+to do that:
 
-1. **`--ca FILE`:** you name the root. Built-in fingerprints are then turned off for that run.
+1. **`--ca FILE`:** you name the root. Built-in fingerprints and your authority list are then turned
+   off for that run.
 2. **Built-in fingerprints:** `evidence_seal/trust.py` lists the SHA-256 fingerprint of the FreeTSA
    root, `a6379e7cecc05faa3cbf076013d745e327bbbaa38c0b9af22469d4701d18aabc`.
+3. **Your authority list:** roots you added with `authority add` or `authority trust`, after checking
+   their fingerprints. The list is yours, on this computer only. See
+   [docs/AUTHORITIES.md](docs/AUTHORITIES.md), which also covers the local test authority, whose
+   tokens prove nothing to anyone else.
 
 Otherwise the chain check is NOT CHECKED and the overall result is INCOMPLETE, however good the
 signature is. The `.ca.crt` copy from `stamp` is only a convenience, and using it with `--ca` proves

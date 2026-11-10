@@ -12,7 +12,8 @@ and never rewritten.
 
 Public API: Entry, Root, FORMAT, list_path(), roots_folder(), check_name(), builtin_entries(),
 user_entries(), all_entries(), find(), add(), remove(), trust_root(), untrust_root(), normalize_fingerprint(),
-register_test_authority(), default_store(), store_for(), test_authority_for(), entry_for_root().
+check_test_registration(), register_test_authority(), root_problem(), read_roots(), default_store(),
+store_for(), entries_for_naming(), entry_for_root(), test_authority_for().
 """
 
 from __future__ import annotations
@@ -534,22 +535,27 @@ def store_for(entry: Entry) -> TrustStore:
     return TrustStore(listed=entry.listed_roots(), only=f"the roots listed for {entry.name}")
 
 
-def entry_for_root(fingerprint: str) -> Optional[Entry]:
-    """The entry that lists this root, built-in or the user's. A list that cannot be read lists nothing."""
+def entries_for_naming() -> List[Entry]:
+    """Every entry, for naming roots in output. A user list that cannot be read names nothing here."""
     try:
-        entries = all_entries()
+        return all_entries()
     except AuthorityListError:
-        entries = builtin_entries()
-    for entry in entries:
+        return builtin_entries()
+
+
+def entry_for_root(fingerprint: str, entries: Optional[Sequence[Entry]] = None) -> Optional[Entry]:
+    """The entry that lists this root, built-in or the user's."""
+    for entry in entries_for_naming() if entries is None else entries:
         if any(root.sha256 == fingerprint for root in entry.roots):
             return entry
     return None
 
 
-def test_authority_for(certificates: Iterable[Certificate]) -> Optional[str]:
+def test_authority_for(certificates: Iterable[Certificate], entries: Optional[Sequence[Entry]] = None) -> Optional[str]:
     """The name of the listed test authority one of these certificates is the root of, if any."""
+    entries = entries_for_naming() if entries is None else entries
     for cert in certificates:
-        entry = entry_for_root(cert.sha256)
+        entry = entry_for_root(cert.sha256, entries)
         if entry is not None and entry.test:
             return entry.name
     return None

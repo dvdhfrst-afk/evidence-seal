@@ -205,7 +205,7 @@ def _list(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps({"schema_version": 1, "authorities": [entry.to_dict() for entry in entries]}, indent=2))
         return EXIT_VERIFIED
-    width = max(len(entry.name) for entry in entries)
+    width = max((len(entry.name) for entry in entries), default=0)
     for entry in entries:
         roots = len(entry.roots)
         say(f"{entry.name.ljust(width)}  {entry.url}  ({_kind(entry)}, {roots} root{'s' if roots != 1 else ''})")

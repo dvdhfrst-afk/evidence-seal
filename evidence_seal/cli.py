@@ -90,7 +90,7 @@ def _verify_arguments(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         metavar="FILE",
-        help="trust this root certificate file, instead of the built-in fingerprints; can repeat",
+        help="trust only this root certificate file, instead of the built-in fingerprints and your authority list; can repeat",
     )
     parser.add_argument(
         "--untrusted",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
 from . import authorities, cms, tokencheck, tsp
 from .text import printable_block
@@ -10,9 +10,9 @@ from .trust import authority_for_root
 from .x509 import Certificate
 
 
-def _certificate_facts(cert: Certificate) -> Dict[str, Any]:
+def _certificate_facts(cert: Certificate, entries: Sequence[authorities.Entry]) -> Dict[str, Any]:
     known = authority_for_root(cert.sha256)
-    listed = authorities.entry_for_root(cert.sha256)
+    listed = authorities.entry_for_root(cert.sha256, entries)
     return {
         "subject": cert.subject.display(),
         "issuer": cert.issuer.display(),
@@ -37,8 +37,9 @@ def describe(token_bytes: bytes) -> Dict[str, Any]:
     out["test_authority"] = None
     signed = response.signed_data
     if signed is not None:
-        out["certificates"] = [_certificate_facts(cert) for cert in signed.certificates]
-        out["test_authority"] = authorities.test_authority_for(signed.certificates)
+        entries = authorities.entries_for_naming()
+        out["certificates"] = [_certificate_facts(cert, entries) for cert in signed.certificates]
+        out["test_authority"] = authorities.test_authority_for(signed.certificates, entries)
         if len(signed.signers) == 1:
             signer = cms.find_signer_certificate(signed.signers[0], signed.certificates)
             if signer is not None:
