@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from . import __version__, manifest, scan, sealing, tokencheck
+from . import __version__, authorities, manifest, scan, sealing, tokencheck
 from .errors import CertificateFileError, UsageError
 from .manifest import Entry, Manifest
 from .results import Check, FileDifferences, Status, Verification
@@ -242,7 +242,7 @@ def verify(options: VerifyOptions) -> Verification:
         raise UsageError(f"manifest {manifest_path} does not exist")
     data = manifest.read_manifest(manifest_path)
     try:
-        store = TrustStore.from_files(options.ca_files)
+        store = TrustStore.from_files(options.ca_files) if options.ca_files else authorities.default_store()
         untrusted = _load_certificates(options.untrusted_files)
     except CertificateFileError as exc:
         raise UsageError(str(exc)) from None
@@ -313,6 +313,7 @@ def verify(options: VerifyOptions) -> Verification:
         notes.append(f"{data.note_lines} lines of the manifest are free text. They are covered by the token as written.")
 
     report: Optional[tokencheck.TokenReport] = None
+    test_authority = None
     if token_path is None:
         token_checks = [
             Check(
@@ -336,6 +337,7 @@ def verify(options: VerifyOptions) -> Verification:
         )
         token_checks = report.checks
         notes.extend(report.notes)
+        test_authority = authorities.test_authority_for(_token_certificates(report))
         if report.facts and report.facts.time and data.created and report.response and report.response.tst_info:
             stamped = report.response.tst_info.gen_time
             if _created_after(data.created, stamped):
@@ -363,7 +365,16 @@ def verify(options: VerifyOptions) -> Verification:
         anchor_certificates=report.roots if report else [],
         checked_at=tokencheck.format_time(now),
         tool_version=__version__,
+        test_authority=test_authority,
     )
+
+
+def _token_certificates(report: tokencheck.TokenReport) -> List[Certificate]:
+    """The certificates this token carries, and the chain it was checked along."""
+    carried = []
+    if report.response is not None and report.response.signed_data is not None:
+        carried = list(report.response.signed_data.certificates)
+    return carried + report.chain
 
 
 def _created_after(created: str, stamped: datetime) -> bool:

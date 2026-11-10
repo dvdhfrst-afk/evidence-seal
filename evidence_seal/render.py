@@ -92,4 +92,7 @@ def render_text(verification: Verification) -> str:
     lines.append("")
     lines.append(f"RESULT: {verification.overall}")
     lines.append(summary_sentence(verification))
+    warning = verification.test_authority_warning()
+    if warning:
+        lines.append(warning)
     return printable_block(lines)

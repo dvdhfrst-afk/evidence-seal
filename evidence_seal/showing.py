@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from . import cms, tokencheck, tsp
+from . import authorities, cms, tokencheck, tsp
 from .text import printable_block
 from .trust import authority_for_root
 from .x509 import Certificate
@@ -12,6 +12,7 @@ from .x509 import Certificate
 
 def _certificate_facts(cert: Certificate) -> Dict[str, Any]:
     known = authority_for_root(cert.sha256)
+    listed = authorities.entry_for_root(cert.sha256)
     return {
         "subject": cert.subject.display(),
         "issuer": cert.issuer.display(),
@@ -20,6 +21,7 @@ def _certificate_facts(cert: Certificate) -> Dict[str, Any]:
         "key": cert.public_key.describe(),
         "sha256": cert.sha256,
         "known_root": known.name if known else None,
+        "listed_root": listed.name if listed is not None and not listed.builtin else None,
     }
 
 
@@ -32,9 +34,11 @@ def describe(token_bytes: bytes) -> Dict[str, Any]:
     out["failure"] = response.failure_text() or None
     out["certificates"] = []
     out["signer"] = None
+    out["test_authority"] = None
     signed = response.signed_data
     if signed is not None:
         out["certificates"] = [_certificate_facts(cert) for cert in signed.certificates]
+        out["test_authority"] = authorities.test_authority_for(signed.certificates)
         if len(signed.signers) == 1:
             signer = cms.find_signer_certificate(signed.signers[0], signed.certificates)
             if signer is not None:
@@ -78,6 +82,13 @@ def render_text(data: Dict[str, Any]) -> str:
         lines.append(f"    SHA-256 {cert['sha256']}")
         if cert["known_root"]:
             lines.append(f"    this fingerprint is built in as the {cert['known_root']} root")
+        elif cert["listed_root"]:
+            lines.append(f"    this is the root of {cert['listed_root']} in your authority list")
     lines.append("")
+    if data["test_authority"]:
+        lines.append(
+            f"This token comes from {data['test_authority']}, a local test authority on this computer."
+            " It proves nothing to anyone else."
+        )
     lines.append("Nothing above has been verified. This command only reads the token. Use verify to check it.")
     return printable_block(lines)

@@ -52,6 +52,7 @@ class TokenReport:
     response: Optional[tsp.TimeStampResponse] = None
     signer: Optional[Certificate] = None
     roots: List[Certificate] = field(default_factory=list)
+    chain: List[Certificate] = field(default_factory=list)
     untrusted: List[Certificate] = field(default_factory=list)
 
     def status_of(self, key: str) -> Optional[Status]:
@@ -182,7 +183,7 @@ def check_token(
             facts.signer = signer.subject.display()
             facts.signer_sha256 = signer.sha256
             checks.append(_signature_check(signer_info, signer, info, pool, response.token_raw or b""))
-            chain_check, notes, roots = _chain_check(signer, pool, store, info.gen_time, now)
+            chain_check, notes, roots = _chain_check(signer, pool, store, info.gen_time, now, report)
             checks.append(chain_check)
             report.notes.extend(notes)
             report.roots = roots
@@ -317,11 +318,13 @@ def _chain_check(
     store: TrustStore,
     at_time: datetime,
     now: datetime,
+    report: TokenReport,
 ) -> Tuple[Check, List[str], List[Certificate]]:
     notes: List[str] = []
     result = chain.validate(signer, pool, store, at_time)
+    report.chain = list(result.path)
     roots: List[Certificate] = []
-    for cert in list(pool) + store.certificates:
+    for cert in list(pool) + store.anchor_certificates:
         if store.anchor_label(cert) is not None and cert not in roots:
             roots.append(cert)
     for cert in result.path:
@@ -345,7 +348,7 @@ def _chain_check(
     if result.kind == chain.UNANCHORED:
         detail = (
             f"{result.detail}. The token's own certificates prove nothing by themselves, because anyone can"
-            " make such a chain. Pass the authority's root with --ca to check it."
+            " make such a chain. Pass the authority's root with --ca, or add it to your authority list, to check it."
         )
         return _check(CHAIN, Status.NOT_CHECKED, detail), notes, roots
     if not roots:

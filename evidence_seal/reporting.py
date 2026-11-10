@@ -194,6 +194,8 @@ def _claim_rows(verification: Verification, context: ReportContext) -> List[Tupl
 def render_report_text(verification: Verification, context: ReportContext) -> str:
     lines: List[str] = ["EVIDENCE SEAL REPORT", f"Checked {verification.checked_at} by evidence-seal {verification.tool_version}"]
     lines.extend(["", f"RESULT: {verification.overall}", render.summary_sentence(verification)])
+    if verification.test_authority_warning():
+        lines.append(verification.test_authority_warning())
     lines.extend(["", "WHAT IS CLAIMED"])
     lines.extend(f"  {label}: {value}" for label, value in _claim_rows(verification, context))
     lines.extend(["", "RESULTS OF THIS CHECK (each one separate)"])
@@ -258,6 +260,10 @@ def render_report_html(verification: Verification, context: ReportContext) -> st
         f"<p>Checked {e(verification.checked_at)} by evidence-seal {e(verification.tool_version)}</p>",
         f'<p class="result">Result: {e(overall)}</p>',
         f"<p>{e(render.summary_sentence(verification))}</p>",
+    ]
+    if verification.test_authority_warning():
+        parts.append(f'<p class="result">{e(verification.test_authority_warning())}</p>')
+    parts += [
         "<h2>What is claimed</h2><table>",
     ]
     for label, value in _claim_rows(verification, context):

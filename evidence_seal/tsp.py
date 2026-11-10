@@ -44,6 +44,7 @@ class TimeStampRequest:
     policy: Optional[str]
     nonce: Optional[int]
     cert_req: bool
+    extensions: bool = False
 
 
 def build_request(
@@ -77,7 +78,7 @@ def parse_request(data: bytes) -> TimeStampRequest:
     policy_node = cursor.optional_universal(der.OID)
     nonce_node = cursor.optional_universal(der.INTEGER)
     cert_node = cursor.optional_universal(der.BOOLEAN)
-    cursor.optional_context(0)
+    extensions = cursor.optional_context(0)
     cursor.finish()
     return TimeStampRequest(
         version,
@@ -86,6 +87,7 @@ def parse_request(data: bytes) -> TimeStampRequest:
         der.oid_value(policy_node) if policy_node is not None else None,
         der.int_value(nonce_node) if nonce_node is not None else None,
         der.bool_value(cert_node) if cert_node is not None else False,
+        extensions is not None,
     )
 
 

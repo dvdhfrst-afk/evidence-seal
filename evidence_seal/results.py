@@ -131,6 +131,16 @@ class Verification:
     anchor_certificates: List[Any] = field(default_factory=list)
     checked_at: str = ""
     tool_version: str = ""
+    test_authority: Optional[str] = None
+
+    def test_authority_warning(self) -> Optional[str]:
+        """A plain statement when the token comes from a local test authority. The verdict is unchanged."""
+        if self.test_authority is None:
+            return None
+        return (
+            f"This token comes from {self.test_authority}, a local test authority on this computer."
+            " It proves nothing to anyone else: whoever holds its key file can sign any date."
+        )
 
     @property
     def checks(self) -> List[Check]:
@@ -174,4 +184,5 @@ class Verification:
             "not_checked_by_design": self.limits,
             "checked_at": self.checked_at,
             "tool_version": self.tool_version,
+            "test_authority": self.test_authority,
         }

@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from evidence_seal import cli, home, openssl_bridge
 
@@ -60,3 +61,18 @@ class TempFolderTestCase(unittest.TestCase):
         manifest = self.temp / "sample-manifest.txt"
         shutil.copyfile(SAMPLE_MANIFEST, manifest)
         return folder, manifest
+
+
+class HomeTestCase(TempFolderTestCase):
+    """A private folder and a home folder of its own, so the authority list starts empty in every test.
+
+    Proxies are turned off too, because the servers these tests talk to are on this computer.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.home = self.temp / "home"
+        environment = {home.ENVIRONMENT_VARIABLE: str(self.home), "no_proxy": "*", "NO_PROXY": "*"}
+        patcher = mock.patch.dict(os.environ, environment)
+        patcher.start()
+        self.addCleanup(patcher.stop)
