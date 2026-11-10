@@ -96,8 +96,10 @@ asks `tsa.example.test` with a 30 second timeout.
 | `library` | `on` or `off`: whether commands record what they do in the library | `on` | the library |
 
 A key that a command does not use is ignored by that command, so one profile can serve them all.
-`authority` takes a URL. Any other value is read as the name of an authority. This version knows no
-authority names, so `stamp` and `config check` report such a value as not known.
+`authority` takes a URL, or the name of an entry in the authority list (see
+[AUTHORITIES.md](AUTHORITIES.md)). A name works like `stamp --authority NAME`: the entry's URL, hash,
+policy and roots are used, `ca` from the settings is not, and `hash` or `policy` set in the settings
+still win over the entry's. `stamp` and `config check` report a name that is not in the list.
 
 In `purpose`, `{folder}` is the sealed folder's name and `{date}` is the date of the manifest's
 created field, in UTC, such as `2026-11-09`. Write `{{` and `}}` for a brace itself. Any other name

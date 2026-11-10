@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import __version__, render, reporting, scan, sealing, settings, showing, stamping, verification
+from . import __version__, authorities, render, reporting, scan, sealing, settings, showing, stamping, trust, verification
 from .errors import DerError, EvidenceSealError, TokenFormatError, UsageError
 from .manifest import MAX_SIDE_FILE_BYTES, read_limited
 from .results import EXIT_FAILED, EXIT_INTERNAL, EXIT_INTERRUPTED, EXIT_USAGE, EXIT_VERIFIED, Status
@@ -87,7 +87,7 @@ def _verify_arguments(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         metavar="FILE",
-        help="trust this root certificate file, instead of the built-in fingerprints; can repeat",
+        help="trust only this root certificate file, instead of the built-in fingerprints and your authority list; can repeat",
     )
     parser.add_argument(
         "--untrusted",
@@ -142,8 +142,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stamp.add_argument("manifest", type=Path, help="the manifest file")
     stamp.add_argument("--tsa-url", help=f"timestamp authority URL (default: {settings.built_in('authority')})")
-    stamp.add_argument("--hash", dest="hash_name", help=f"sha256, sha384 or sha512 (default: {settings.built_in('hash')})")
-    stamp.add_argument("--policy", help="ask for this policy OID (object identifier)")
+    stamp.add_argument(
+        "--authority",
+        metavar="NAME",
+        help="use this authority from the authority list, with its URL, policy and hash, and check the answer against its roots",
+    )
+    stamp.add_argument("--hash", dest="hash_name", help="sha256, sha384 or sha512 (default: sha256, or the authority's)")
+    stamp.add_argument("--policy", help="ask for this policy OID (object identifier) (default: none, or the authority's)")
     stamp.add_argument("--out", type=Path, help="token path (default: the manifest's name with .tsr)")
     stamp.add_argument(
         "--timeout",
@@ -160,7 +165,9 @@ def build_parser() -> argparse.ArgumentParser:
             f" (default: {settings.built_in('retries')})"
         ),
     )
-    stamp.add_argument("--ca", type=Path, action="append", default=[], metavar="FILE", help="trust this root file for the check")
+    stamp.add_argument(
+        "--ca", type=Path, action="append", default=[], metavar="FILE", help="trust only this root file for the check; can repeat"
+    )
     stamp.add_argument("--force", action="store_true", help="replace an existing token, keeping a dated copy of the old one")
     _add_settings_options(stamp)
 
@@ -204,7 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 # Modules that add their own commands. Each has register(commands), which adds its parsers to the
 # subparsers object and returns a dict from command name to handler.
-COMMAND_MODULES: Tuple[str, ...] = ("settings_commands",)
+COMMAND_MODULES: Tuple[str, ...] = ("settings_commands", "authority_commands")
 
 
 def _command_modules():
@@ -231,17 +238,22 @@ def _apply_settings(args: argparse.Namespace) -> None:
             args.date = created
             args.purpose = settings.expand_purpose(str(template), folder.name or ".", created)
         return
-    args.ca = args.ca or chosen.files("ca")
     if args.command == "stamp":
-        if args.tsa_url is None:
+        if args.tsa_url is None and args.authority is None:
             try:
-                args.tsa_url = settings.resolve_authority(str(chosen.value("authority")))
+                args.tsa_url, args.authority = settings.resolve_authority(str(chosen.value("authority")))
             except UsageError as exc:
                 raise UsageError(f"{exc} ({chosen['authority'].source()})") from None
+        if args.authority is None:
+            args.ca = args.ca or chosen.files("ca")
         for name, key in (("hash_name", "hash"), ("policy", "policy"), ("timeout", "timeout"), ("retries", "retries")):
-            if getattr(args, name) is None:
-                setattr(args, name, chosen.value(key))
+            if getattr(args, name) is not None:
+                continue
+            if args.authority is not None and key in ("hash", "policy") and chosen[key].origin == "built-in":
+                continue  # the authority's own entry decides these unless the settings say otherwise
+            setattr(args, name, chosen.value(key))
         return
+    args.ca = args.ca or chosen.files("ca")
     args.settings_excludes = chosen.exclude_items()
     args.untrusted = args.untrusted or chosen.files("untrusted")
     args.allow_added = args.allow_added or bool(chosen.value("allow-added"))
@@ -326,17 +338,37 @@ def command_seal(args: argparse.Namespace) -> int:
     return EXIT_VERIFIED
 
 
+def _stamp_settings(args: argparse.Namespace) -> Tuple[str, str, Optional[str], TrustStore, Optional[authorities.Entry]]:
+    """The URL, hash, policy and roots for a stamp, from the options or from an authority list entry."""
+    if args.authority is None:
+        try:
+            store = TrustStore.from_files(args.ca) if args.ca else authorities.default_store()
+        except EvidenceSealError as exc:
+            raise UsageError(str(exc)) from None
+        return args.tsa_url or trust.DEFAULT_TSA_URL, args.hash_name or "sha256", args.policy, store, None
+    if args.tsa_url is not None:
+        raise UsageError("--authority and --tsa-url cannot be used together. The authority's entry holds its URL")
+    if args.ca:
+        raise UsageError("--authority checks the answer against the roots in its entry, so --ca cannot be added")
+    entry = authorities.find(args.authority)
+    if entry is None:
+        raise UsageError(f"there is no authority named {args.authority!r} in the list. See the names with: authority list")
+    if not entry.roots:
+        raise UsageError(
+            f"no root is trusted for {entry.name} yet, so its answer could not be checked. Nothing was sent."
+            f" Add one with: authority trust {entry.name} --root FILE"
+        )
+    return entry.url, args.hash_name or entry.hash_name, args.policy or entry.policy, authorities.store_for(entry), entry
+
+
 def command_stamp(args: argparse.Namespace) -> int:
-    try:
-        store = TrustStore.from_files(args.ca)
-    except EvidenceSealError as exc:
-        raise UsageError(str(exc)) from None
+    url, hash_name, policy, store, entry = _stamp_settings(args)
     result = stamping.stamp_manifest(
         args.manifest,
-        tsa_url=args.tsa_url,
-        hash_name=args.hash_name,
+        tsa_url=url,
+        hash_name=hash_name,
         out=args.out,
-        policy=args.policy,
+        policy=policy,
         timeout=args.timeout,
         force=args.force,
         store=store,
@@ -353,6 +385,10 @@ def command_stamp(args: argparse.Namespace) -> int:
     if result.facts is not None:
         _say(f"Time in token: {result.facts.time}")
         _say(f"Authority: {result.facts.authority or result.facts.signer or 'not stated'}")
+    if entry is not None:
+        _say(f"From the authority list: {entry.name}, checked against its roots only")
+        if entry.test:
+            _say(f"  {entry.name} is a local test authority. This token proves nothing to anyone else.")
     for check in result.checks:
         _say(f"  [{render.status_word(check.status)}] {check.title}")
     for note in result.notes:

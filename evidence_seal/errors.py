@@ -31,3 +31,7 @@ class StampError(EvidenceSealError):
 
 class UsageError(EvidenceSealError):
     """Bad arguments that argparse cannot catch by itself."""
+
+
+class AuthorityListError(UsageError):
+    """The authority list cannot be read or changed. No verdict is reached on a guess about it."""

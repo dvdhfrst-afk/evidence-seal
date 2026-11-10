@@ -25,7 +25,7 @@ SOURCE_DIRS = ("evidence_seal", "tests", "docs", "examples")
 ALLOWED_IMPORTS = {
     "argparse", "ast", "atexit", "base64", "binascii", "collections", "configparser", "contextlib", "csv",
     "dataclasses", "datetime", "difflib", "enum", "errno", "fnmatch", "functools", "glob", "hashlib", "hmac", "html",
-    "http", "importlib", "io", "itertools", "json", "math", "mimetypes", "os", "pathlib", "random", "re",
+    "http", "importlib", "io", "ipaddress", "itertools", "json", "math", "mimetypes", "os", "pathlib", "random", "re",
     "secrets", "shlex", "shutil", "signal", "socket", "socketserver", "sqlite3", "ssl", "stat", "string",
     "struct", "subprocess", "sys", "tempfile", "textwrap", "threading", "time", "traceback", "typing",
     "unicodedata", "unittest", "urllib", "uuid", "xml", "zlib", "__future__", "evidence_seal", "tests",
@@ -87,12 +87,12 @@ class Sources(unittest.TestCase):
                 for name in names:
                     self.assertIn(name.split(".")[0], ALLOWED_IMPORTS, f"{path}: {name}")
 
-    def test_network_code_lives_in_one_module(self):
+    def test_network_code_lives_in_two_modules(self):
         for path in python_files():
             if path.parts[-2] != "evidence_seal":
                 continue
             text = path.read_text(encoding="utf-8")
-            if path.name != "stamping.py":
+            if path.name not in ("stamping.py", "local_server.py"):
                 self.assertNotIn("urllib", text, path.name)
                 self.assertNotIn("socket", text, path.name)
 

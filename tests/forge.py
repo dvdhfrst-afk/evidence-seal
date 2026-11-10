@@ -1,72 +1,34 @@
 """A small pure Python timestamp authority for tests, with no key files.
 
-Keys are made fresh from fixed seeds, so nothing secret is stored and the tests
-need no openssl. Its purpose is to build tokens that are validly signed but wrong
-in some specific way, which is exactly what tampering with bytes cannot produce.
+The building blocks are the package's own (evidence_seal.issuing). What lives here is only what tests
+need on top: keys made from fixed seeds, so nothing secret is stored and runs repeat exactly, an RSA
+key, and tokens that are validly signed but wrong in some specific way, which is exactly what
+tampering with bytes cannot produce.
 """
 
 import hashlib
 import random
 from datetime import datetime, timezone
 
-from evidence_seal import der, ecdsa, hashes, oids
-from evidence_seal.der import (
-    encode_bits,
-    encode_bool,
-    encode_context,
-    encode_int,
-    encode_null,
-    encode_octets,
-    encode_oid,
-    encode_seq,
-    encode_set,
-    encode_time,
-    encode_utc_time,
-    encode_utf8,
-)
+from evidence_seal import der, ecdsa, hashes, issuing, oids
+from evidence_seal.der import encode_bits, encode_int, encode_null, encode_octets, encode_oid, encode_seq, encode_set
+# The tests use these through this module, alongside the test-only pieces below.
+from evidence_seal.issuing import CA_EXTENSIONS, TSA_EXTENSIONS, basic_constraints, extended_key_usage, key_usage
 
 FAR_PAST = datetime(2001, 1, 1, tzinfo=timezone.utc)
 FAR_FUTURE = datetime(2099, 1, 1, tzinfo=timezone.utc)
 TOKEN_TIME = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
-ECDSA_BY_HASH = {
-    "sha1": oids.ECDSA_SHA1,
-    "sha256": oids.ECDSA_SHA256,
-    "sha384": oids.ECDSA_SHA384,
-    "sha512": oids.ECDSA_SHA512,
-}
 _RNG = random.Random(20260301)
 
 
-class EcKey:
+class EcKey(issuing.EcPrivateKey):
+    """A key from a fixed seed, with signing nonces from a fixed sequence, so every run is the same."""
+
     def __init__(self, seed, curve=ecdsa.P256, curve_oid=oids.CURVE_P256):
-        rng = random.Random(seed)
-        self.curve = curve
-        self.curve_oid = curve_oid
-        self.d = rng.randrange(1, curve.n)
-        self.point = ecdsa.scalar_multiply(curve, self.d, curve.generator)
+        super().__init__(random.Random(seed).randrange(1, curve.n), curve, curve_oid)
 
-    def spki(self):
-        size = self.curve.size
-        encoded = b"\x04" + self.point[0].to_bytes(size, "big") + self.point[1].to_bytes(size, "big")
-        return encode_seq(encode_seq(encode_oid(oids.EC_PUBLIC_KEY), encode_oid(self.curve_oid)), encode_bits(encoded))
-
-    def algorithm(self, hash_name):
-        return encode_seq(encode_oid(ECDSA_BY_HASH[hash_name]))
-
-    def sign(self, message, hash_name="sha256"):
-        digest = hashlib.new(hash_name, message).digest()
-        n = self.curve.n
-        e = int.from_bytes(digest, "big")
-        excess = len(digest) * 8 - n.bit_length()
-        if excess > 0:
-            e >>= excess
-        while True:
-            k = _RNG.randrange(1, n)
-            point = ecdsa.scalar_multiply(self.curve, k, self.curve.generator)
-            r = point[0] % n
-            s = pow(k, n - 2, n) * (e + r * self.d) % n
-            if r and s:
-                return encode_seq(encode_int(r), encode_int(s))
+    def _nonce(self):
+        return _RNG.randrange(1, self.curve.n)
 
 
 def _is_probable_prime(candidate, rng):
@@ -137,51 +99,11 @@ class RsaKey:
 
 
 def name(common_name):
-    attribute = encode_seq(encode_oid("2.5.4.3"), encode_utf8(common_name))
-    org = encode_seq(encode_oid("2.5.4.10"), encode_utf8("evidence-seal tests"))
-    return encode_seq(encode_set([org]), encode_set([attribute]))
-
-
-def _extension(oid, critical, value):
-    parts = [encode_oid(oid)]
-    if critical:
-        parts.append(encode_bool(True))
-    parts.append(encode_octets(value))
-    return encode_seq(*parts)
-
-
-def basic_constraints(ca, path_length=None, critical=True):
-    body = []
-    if ca:
-        body.append(encode_bool(True))
-    if path_length is not None:
-        body.append(encode_int(path_length))
-    return _extension(oids.EXT_BASIC_CONSTRAINTS, critical, encode_seq(*body))
-
-
-def key_usage(bits, critical=True):
-    highest = max(bits)
-    value = bytearray((highest // 8) + 1)
-    for bit in bits:
-        value[bit // 8] |= 0x80 >> (bit % 8)
-    unused = 7 - highest % 8
-    return _extension(oids.EXT_KEY_USAGE, critical, der.encode_tlv(der.BIT_STRING, bytes([unused]) + bytes(value)))
-
-
-def extended_key_usage(usages=(oids.KP_TIME_STAMPING,), critical=True):
-    return _extension(oids.EXT_EXTENDED_KEY_USAGE, critical, encode_seq(*[encode_oid(item) for item in usages]))
+    return issuing.make_name(common_name, "evidence-seal tests")
 
 
 def unknown_critical_extension():
-    return _extension("1.2.3.4.5.6.7", True, encode_null())
-
-
-TSA_EXTENSIONS = (basic_constraints(False), key_usage([0]), extended_key_usage())
-CA_EXTENSIONS = (basic_constraints(True), key_usage([5, 6]))
-
-
-def _validity_time(moment):
-    return encode_utc_time(moment) if moment.year < 2050 else encode_time(moment)
+    return issuing.extension("1.2.3.4.5.6.7", True, encode_null())
 
 
 def make_certificate(
@@ -195,20 +117,9 @@ def make_certificate(
     extensions=TSA_EXTENSIONS,
     sign_hash="sha256",
 ):
-    algorithm = issuer_key.algorithm(sign_hash)
-    parts = [
-        encode_context(0, encode_int(2)),
-        encode_int(serial),
-        algorithm,
-        name(issuer),
-        encode_seq(_validity_time(not_before), _validity_time(not_after)),
-        name(subject),
-        subject_key.spki(),
-    ]
-    if extensions:
-        parts.append(encode_context(3, encode_seq(*extensions)))
-    tbs = encode_seq(*parts)
-    return encode_seq(tbs, algorithm, encode_bits(issuer_key.sign(tbs, sign_hash)))
+    return issuing.make_certificate(
+        name(subject), subject_key, name(issuer), issuer_key, serial, not_before, not_after, extensions, sign_hash
+    )
 
 
 class Authority:
@@ -273,17 +184,7 @@ def make_tst_info(
     tsa_name=None,
     version=1,
 ):
-    imprint = encode_seq(encode_seq(encode_oid(hash_oid), encode_null()), encode_octets(data_hash))
-    parts = [encode_int(version), encode_oid(policy), imprint, encode_int(serial), encode_time(moment)]
-    if nonce is not None:
-        parts.append(encode_int(nonce))
-    if tsa_name is not None:
-        parts.append(encode_context(0, encode_context(4, tsa_name)))
-    return encode_seq(*parts)
-
-
-def _attribute(oid, *values):
-    return encode_seq(encode_oid(oid), encode_set(values))
+    return issuing.make_tst_info(data_hash, hash_oid, policy, serial, moment, nonce, tsa_name, version)
 
 
 def make_response(
@@ -301,8 +202,6 @@ def make_response(
     version=1,
     digest_name="sha256",
     status=0,
-    status_strings=(),
-    failure_bits=None,
     wrap=True,
     omit_signed_attrs=False,
     omit_signing_cert=False,
@@ -312,9 +211,8 @@ def make_response(
     second_signer=False,
     signer_serial=None,
     corrupt_signature=False,
-    include_token=True,
 ):
-    digest_algorithm = encode_seq(encode_oid(hashes.by_name(digest_name).oid), encode_null())
+    """A response whose token is signed correctly, unless one of the wrong_ or omit_ switches says otherwise."""
     if data_hash is None:
         data_hash = hashlib.sha256(data).digest()
     if tsa_name is None:
@@ -325,47 +223,30 @@ def make_response(
         tst_digest = bytes(len(tst_digest))
     content_type = oids.CMS_DATA if wrong_content_type else oids.CT_TST_INFO
     attributes = [
-        _attribute(oids.ATTR_CONTENT_TYPE, encode_oid(content_type)),
-        _attribute(oids.ATTR_MESSAGE_DIGEST, encode_octets(tst_digest)),
+        issuing.attribute(oids.ATTR_CONTENT_TYPE, encode_oid(content_type)),
+        issuing.attribute(oids.ATTR_MESSAGE_DIGEST, encode_octets(tst_digest)),
     ]
     if not omit_signing_cert:
         cert_hash = hashlib.sha256(b"not this certificate" if wrong_signing_cert else signer_der).digest()
         ess = encode_seq(encode_seq(encode_seq(encode_octets(cert_hash))))
-        attributes.append(_attribute(oids.ATTR_SIGNING_CERTIFICATE_V2, ess))
-    signed_set = encode_set(attributes)
-    issuer_and_serial = encode_seq(name(issuer_name), encode_int(signer_serial or _serial_of(signer_der)))
-    signer_parts = [encode_int(1), issuer_and_serial, digest_algorithm]
-    if omit_signed_attrs:
-        signature = signer_key.sign(tst, digest_name)
-    else:
-        signer_parts.append(der.encode_tlv(0xA0, der.parse(signed_set).content))
-        signature = signer_key.sign(signed_set, digest_name)
+        attributes.append(issuing.attribute(oids.ATTR_SIGNING_CERTIFICATE_V2, ess))
+    signed_set = None if omit_signed_attrs else encode_set(attributes)
+    signature = signer_key.sign(tst if signed_set is None else signed_set, digest_name)
     if corrupt_signature:
         signature = signer_key.sign(b"something else entirely", digest_name)
-    signer_parts.extend([signer_key.algorithm(digest_name), encode_octets(signature)])
-    signer_info = encode_seq(*signer_parts)
+    signer_info = issuing.make_signer_info(
+        name(issuer_name),
+        signer_serial or _serial_of(signer_der),
+        digest_name,
+        signed_set,
+        signer_key.algorithm(digest_name),
+        signature,
+    )
     signers = [signer_info, signer_info] if second_signer else [signer_info]
-    signers_set = der.encode_tlv(0x31, b"".join(signers))
-    body_parts = [
-        encode_int(3),
-        encode_set([digest_algorithm]),
-        encode_seq(encode_oid(oids.CT_TST_INFO), encode_context(0, encode_octets(tst))),
-    ]
-    if certificates:
-        body_parts.append(encode_context(0, b"".join(certificates)))
-    body_parts.append(signers_set)
-    token = encode_seq(encode_oid(oids.CMS_SIGNED_DATA), encode_context(0, encode_seq(*body_parts)))
+    token = issuing.make_signed_data(tst, signers, certificates, digest_name)
     if not wrap:
         return token
-    status_parts = [encode_int(status)]
-    if status_strings:
-        status_parts.append(encode_seq(*[encode_utf8(text) for text in status_strings]))
-    if failure_bits is not None:
-        status_parts.append(failure_bits)
-    parts = [encode_seq(*status_parts)]
-    if include_token:
-        parts.append(token)
-    return encode_seq(*parts)
+    return issuing.make_response(token, status)
 
 
 def _serial_of(cert_der):
@@ -374,11 +255,6 @@ def _serial_of(cert_der):
     return der.int_value(tbs.children[1])
 
 
-def rejection(status=2, strings=("request refused",), failure=b"\x07\x04"):
+def rejection(status=2, strings=("request refused",), failure=(0, 2)):
     """A response with no token, as an authority sends for a refused request."""
-    parts = [encode_int(status)]
-    if strings:
-        parts.append(encode_seq(*[encode_utf8(text) for text in strings]))
-    if failure is not None:
-        parts.append(der.encode_tlv(der.BIT_STRING, b"\x05\xa0"))
-    return encode_seq(encode_seq(*parts))
+    return issuing.make_response(None, status, strings, failure)

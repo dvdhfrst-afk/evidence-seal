@@ -181,7 +181,7 @@ def validate(
         return ChainResult(FAILED, f"certificate {signer.subject.display()} is malformed: {exc}")
     if purpose:
         return ChainResult(FAILED, purpose)
-    candidates = list(pool) + [cert for cert in store.certificates if all(cert.raw != c.raw for c in pool)]
+    candidates = list(pool) + [cert for cert in store.anchor_certificates if all(cert.raw != c.raw for c in pool)]
     search = _Search(candidates, store, at_time)
     try:
         found = search.walk([signer], [], None)
@@ -195,5 +195,5 @@ def validate(
         return ChainResult(UNSUPPORTED, search.unsupported[0])
     reason = search.unanchored[0] if search.unanchored else "no path to a trusted root was found"
     if store.explicit:
-        return ChainResult(FAILED, f"{reason}; it does not reach the certificates you supplied")
+        return ChainResult(FAILED, f"{reason}; it does not reach {store.named_roots}")
     return ChainResult(UNANCHORED, reason)

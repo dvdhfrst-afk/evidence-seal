@@ -128,8 +128,11 @@ def check_can_write(path: Path) -> None:
         raise ManifestError(f"cannot write in {folder}: {exc.strerror or exc}. Choose another place with --out") from None
 
 
-def write_new_file(path: Path, data: bytes, force: bool = False) -> None:
-    """Writes through a temporary file so a crash cannot leave half a manifest or token."""
+def write_new_file(path: Path, data: bytes, force: bool = False, mode: Optional[int] = None) -> None:
+    """Writes through a temporary file so a crash cannot leave half a manifest or token.
+
+    ``mode`` sets the permissions, for a file that must be private from the moment it has its name.
+    """
     path = Path(path)
     if path.is_dir():
         raise UsageError(f"{path} is a folder. Give a file name")
@@ -137,7 +140,7 @@ def write_new_file(path: Path, data: bytes, force: bool = False) -> None:
         raise ManifestError(f"{path} already exists; use --force to replace it, or choose another name")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        mode = _file_mode(path)
+        mode = _file_mode(path) if mode is None else mode
         handle, temp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
     except OSError as exc:
         raise ManifestError(f"cannot write {path}: {exc.strerror or exc}") from None

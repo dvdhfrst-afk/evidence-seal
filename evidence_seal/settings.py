@@ -11,8 +11,8 @@ What other parts of the tool can use:
 - ``settings_for(file, profile, ignore)`` returns a ``Resolved``: the value of every key in ``KEYS``
   and where it came from, after the profile, then ``[defaults]``, then the built-in value.
   ``Resolved.library`` is the on/off switch for recording into the library.
-- ``resolve_authority(value)`` turns an ``authority`` value into a timestamp authority URL. It is the
-  one place that knows which authority names exist.
+- ``resolve_authority(value)`` turns an ``authority`` value into a URL, or into the name of an entry in
+  the authority list. It is the one place that decides which.
 - ``report-format`` accepts exactly ``reporting.REPORT_FORMATS``.
 """
 
@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from . import hashes, home, reporting, scan, sealing, stamping, trust
+from . import authorities, hashes, home, reporting, scan, sealing, stamping, trust
 from .console import self_command, shown
 from .errors import UsageError
 from .text import printable
@@ -104,11 +104,17 @@ def expand_purpose(template: str, folder: str, created: str) -> str:
     return template.format(folder=folder, date=created[:10])
 
 
-def resolve_authority(value: str) -> str:
-    """The timestamp authority URL for an ``authority`` value."""
+def resolve_authority(value: str) -> Tuple[Optional[str], Optional[str]]:
+    """An ``authority`` value as (URL, None) for an address, or (None, name) for an authority list entry."""
     if value.lower().startswith(("http://", "https://")):
-        return value
-    raise UsageError(f"the authority name {value!r} is not known. Give the authority's http:// or https:// URL instead")
+        return value, None
+    entry = authorities.find(value)
+    if entry is None:
+        raise UsageError(
+            f"the authority name {value!r} is not known. See the names with: authority list,"
+            " or give the authority's http:// or https:// URL"
+        )
+    return None, entry.name
 
 
 def _converted(convert: Callable[[str], object]) -> Callable[[str, Path], object]:

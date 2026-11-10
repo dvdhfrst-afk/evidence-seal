@@ -11,7 +11,7 @@ from unittest import mock
 
 import shlex
 
-from evidence_seal import cli, reporting, settings
+from evidence_seal import authorities, cli, reporting, settings
 from evidence_seal.errors import StampError, UsageError
 from tests import test_docs_and_examples as documents
 from tests.support import LOCAL, ROOT_OF_REPO, TempFolderTestCase, run_cli
@@ -730,7 +730,21 @@ class Precedence(SettingsCase):
             self.assertEqual(stamp.call_args.kwargs["tsa_url"], "http://x.example.test/")
         self.assertIn("the authority name 'Example TSA' is not known", out)
         self.assertIn("(profile lab, settings.ini line 2)", out)
-        self.assertEqual(settings.resolve_authority("HTTPS://tsa.example.test/"), "HTTPS://tsa.example.test/")
+        self.assertEqual(settings.resolve_authority("HTTPS://tsa.example.test/"), ("HTTPS://tsa.example.test/", None))
+
+    def test_an_authority_name_comes_from_the_authority_list(self):
+        manifest = self.write("m.txt", b"manifest\n")
+        root = LOCAL / "root-rsa.crt"
+        code, _, err = run_cli("authority", "add", "Example-TSA", "https://tsa.example.test/tsr", "--root", root, "--hash", "sha384")
+        self.assertEqual(code, 0, err)
+        self.write_settings(ini("[defaults]", "ca =", f"    {root}", "[profile lab]", "authority = example-tsa"))
+        self.assertEqual(run_cli("config", "check")[0], 0)
+        with mock.patch("evidence_seal.stamping.stamp_manifest", side_effect=StampError("stopped by the test")) as stamp:
+            self.refused("stamp", manifest, "--profile", "lab", code=1)
+        sent = stamp.call_args.kwargs
+        self.assertEqual(sent["tsa_url"], "https://tsa.example.test/tsr")
+        self.assertEqual(sent["hash_name"], "sha384")
+        self.assertEqual([root.sha256 for root in sent["store"].anchor_certificates], [authorities.find("Example-TSA").roots[0].sha256])
 
     def test_verify_takes_roots_from_the_settings_and_the_command_line_replaces_them(self):
         self.assertEqual(run_cli("verify", SEALED_MANIFEST, "--folder", MY_WORK)[0], 3)
