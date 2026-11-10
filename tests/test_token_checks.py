@@ -167,7 +167,7 @@ class FixtureTokens(unittest.TestCase):
                 self.assertNotEqual(overall_of(report.checks), "VERIFIED", f"byte {index} mask {mask}")
 
 
-class OpensslFallback(unittest.TestCase):
+class CurvesOnlyOpensslCovers(unittest.TestCase):
     manifest = SAMPLE_MANIFEST.read_bytes()
 
     def run_brainpool(self):
