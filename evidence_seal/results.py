@@ -58,6 +58,29 @@ def exit_code_of(overall: str) -> int:
     return {VERIFIED: EXIT_VERIFIED, FAILED: EXIT_FAILED, INCOMPLETE: EXIT_INCOMPLETE}[overall]
 
 
+UNCHANGED = "unchanged"
+CHANGED = "changed"
+MISSING = "missing"
+ADDED = "added"
+MOVED = "moved"
+UNREADABLE = "unreadable"
+NOT_COMPARED = "not checked"
+
+
+@dataclass
+class FileRow:
+    """One file's outcome, for reports that list every file. Hashes are lowercase hex, sizes in bytes."""
+
+    path: str
+    outcome: str
+    algorithm: Optional[str] = None
+    expected_hash: Optional[str] = None
+    found_hash: Optional[str] = None
+    expected_size: Optional[int] = None
+    found_size: Optional[int] = None
+    found_path: Optional[str] = None
+
+
 @dataclass
 class FileDifferences:
     """What a re-hash of the folder found. Lists hold relative paths."""
@@ -71,6 +94,7 @@ class FileDifferences:
     moved_hints: Dict[str, str] = field(default_factory=dict)
     own_files: List[str] = field(default_factory=list)
     other_unicode_forms: Dict[str, str] = field(default_factory=dict)
+    rows: List[FileRow] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -131,6 +155,7 @@ class Verification:
     anchor_certificates: List[Any] = field(default_factory=list)
     checked_at: str = ""
     tool_version: str = ""
+    file_rows: List[FileRow] = field(default_factory=list)
 
     @property
     def checks(self) -> List[Check]:
