@@ -16,7 +16,7 @@ MY_WORK = EXAMPLES / "my-work"
 SEALED = EXAMPLES / "sealed"
 SEALED_MANIFEST = SEALED / "my-work-manifest.txt"
 SEALED_ROOT = SEALED / "test-authority-root.crt"
-DOCUMENTS = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "docs/FORMAT.md", "docs/CI.md", "examples/README.md"]
+DOCUMENTS = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "docs/FORMAT.md", "docs/REPORTS.md", "docs/CI.md", "examples/README.md"]
 
 
 def fenced_commands(path):

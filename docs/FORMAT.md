@@ -62,7 +62,7 @@ They sit beside the manifest and share its name.
 | `.tsr` | The token: an RFC 3161 TimeStampResp, in DER. A bare token, with `.tst`, also works. |
 | `.tsq` | The request that was sent, in DER, which lets `verify` check the nonce. |
 | `.ca.crt` | A copy of the root certificate from the token, in PEM. A convenience, and proof of nothing. |
-| `.report.txt`, `.report.html` | The output of `report`. |
+| `.report.txt`, `.report.html`, `.report.json`, `.report.md`, `.report.csv`, `.report.junit.xml`, `.report.pdf` | The output of `report`, one name per format. See [REPORTS.md](REPORTS.md). |
 | `.replaced-YYYYMMDDTHHMMSSZ.tsr` | A token that `stamp --force` replaced, and likewise for `.tsq` and `.ca.crt`. |
 
 ## What may change, and what will not
@@ -84,3 +84,6 @@ field is removed or changes meaning only with a new number. JSON is plain ASCII,
 kept in JSON escapes. Control characters are therefore present in the decoded values, so a program that
 prints them should treat them as untrusted text. Only a run that reached a verdict prints JSON. Exit
 code 2, 4 or 130 means there is none, and the message goes to standard error.
+
+`report --format json` wraps this same object in a report with its own `report_schema`, and `export` and
+`diff` have JSON forms of their own. [REPORTS.md](REPORTS.md) describes each one and what in it is stable.
