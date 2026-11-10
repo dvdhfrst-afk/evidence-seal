@@ -1,4 +1,5 @@
-"""The library command: list, show, import, verify, check, forget, tag, untag, log and where.
+"""The library command: list, show, import, verify, check, forget, tag, untag, note, notes, register, log
+and where.
 
 Registered through ``cli.COMMAND_MODULES``. Storage lives in ``library.py``. These actions read the
 files a user names and write only inside the library folder, never beside the user's files.
@@ -16,12 +17,13 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from . import library as lib
-from . import manifest, scan, sealing, verification
-from .console import clear_progress, progress, say, size_text
+from . import manifest, scan, seal_register, sealing, verification
+from .console import clear_progress, deliver, out_path, progress, say, size_text, warn
 from .errors import EvidenceSealError, UsageError
 from .library import Library, LibraryError
 from .results import (
@@ -134,6 +136,42 @@ def register(commands: Any) -> Dict[str, Callable[[argparse.Namespace], int]]:
     untag.add_argument("id", metavar="ID", help=ID_HELP)
     untag.add_argument("tag", metavar="TAG", help="the tag to remove")
 
+    note = action(
+        "note",
+        "add a note to a seal, or withdraw one",
+        "Add a dated note to a seal: why it was sealed, who handled it, what happened next. A note is never"
+        " changed or deleted. --withdraw marks one withdrawn by adding a note with the reason, and keeps its text.",
+        CHANGE_EXITS,
+    )
+    note.add_argument("id", metavar="ID", help=ID_HELP)
+    note.add_argument(
+        "text", nargs="?", metavar="TEXT", help=f"the note, up to {lib.MAX_NOTE_LENGTH} characters; line breaks are fine"
+    )
+    note.add_argument("--withdraw", type=_note_number, metavar="NOTE_NUMBER", help="withdraw this note instead of adding one")
+    note.add_argument("--reason", metavar="TEXT", help="why the note is withdrawn; needed with --withdraw")
+    notes = action("notes", "list a seal's notes", "List a seal's notes, oldest first, withdrawn ones included and marked.", READ_EXITS)
+    notes.add_argument("id", metavar="ID", help=ID_HELP)
+    notes.add_argument("--json", action="store_true", help="print as JSON")
+
+    listed = action(
+        "register",
+        "one document listing the chosen seals, to print or hand over",
+        "Write the evidence register: every chosen seal with its purpose, folder, token, last verification, tags"
+        " and notes, and how to check each one independently. It is an index made from this library and proves"
+        " nothing by itself.",
+        "formats: text, csv (one row per seal), json, markdown, html, pdf. exit codes: 0 written, 1 the library"
+        " could not be read or the file could not be written, 2 bad arguments",
+    )
+    listed.add_argument(
+        "--format", choices=seal_register.REGISTER_FORMATS, default="text", help="register format (default: %(default)s)"
+    )
+    listed.add_argument("--tag", help="only seals with this tag")
+    listed.add_argument("--folder", type=Path, help="only seals whose folder was last seen at this path")
+    listed.add_argument("--since", type=_day, metavar="DATE", help="only seals dated this day (YYYY-MM-DD) or later")
+    listed.add_argument("--until", type=_day, metavar="DATE", help="only seals dated this day (YYYY-MM-DD) or earlier")
+    listed.add_argument("--out", metavar="FILE", help="file to write, or - for standard output (default: standard output)")
+    listed.add_argument("--force", action="store_true", help="replace an existing file; never a seal's own files")
+
     log = action("log", "what happened in the library, newest first", "Show the library's journal of events.", READ_EXITS)
     log.add_argument("id", nargs="?", metavar="ID", help="only this seal's events")
     log.add_argument("--limit", type=_limit, default=20, metavar="N", help="show at most N events (default: %(default)s)")
@@ -152,6 +190,22 @@ def _limit(text: str) -> int:
     if not text.isascii() or not text.isdigit() or not 1 <= int(text) <= lib.MAX_LOG_LIMIT:
         raise argparse.ArgumentTypeError(f"must be a whole number from 1 to {lib.MAX_LOG_LIMIT}")
     return int(text)
+
+
+def _note_number(text: str) -> int:
+    if not text.isascii() or not text.isdigit() or not 1 <= int(text) <= lib.MAX_NOTES:
+        raise argparse.ArgumentTypeError(f"must be a note number from 1 to {lib.MAX_NOTES}")
+    return int(text)
+
+
+def _day(text: str) -> str:
+    try:
+        day = datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        day = None
+    if day != text:
+        raise argparse.ArgumentTypeError(f"must be a day such as 2026-01-31, not {text!r}")
+    return text
 
 
 def run(args: argparse.Namespace) -> int:
@@ -214,12 +268,7 @@ def _last_check(row: Dict[str, Any]) -> str:
 def action_list(args: argparse.Namespace) -> int:
     with _existing() as found:
         rows = found.seals() if found is not None else []
-    if args.folder is not None:
-        wanted = sealing.path_key(args.folder)
-        rows = [row for row in rows if row["folder_path"] and sealing.path_key(Path(row["folder_path"])) == wanted]
-    if args.tag is not None:
-        tag = lib.check_tag(args.tag)
-        rows = [row for row in rows if tag in row["tags"]]
+    rows = lib.matching(rows, args.folder, args.tag)
     if args.json:
         _print_json({"schema_version": JSON_SCHEMA_VERSION, "seals": [_seal_json(row) for row in rows]})
         return EXIT_VERIFIED
@@ -247,9 +296,17 @@ def action_show(args: argparse.Namespace) -> int:
         tokens = library.tokens(sha)
         runs = library.runs(sha)
         events = library.events(sha, lib.MAX_LOG_LIMIT)
+        notes = library.notes(sha)
     if args.json:
         _print_json(
-            {"schema_version": JSON_SCHEMA_VERSION, "seal": _seal_json(row), "tokens": tokens, "runs": runs, "events": events}
+            {
+                "schema_version": JSON_SCHEMA_VERSION,
+                "seal": _seal_json(row),
+                "tokens": tokens,
+                "runs": runs,
+                "notes": notes,
+                "events": events,
+            }
         )
         return EXIT_VERIFIED
     size = f", {count_of(row['total_bytes'], 'byte')}" if row["total_bytes"] is not None else ""
@@ -263,6 +320,9 @@ def action_show(args: argparse.Namespace) -> int:
     say(f"  Folder last seen at: {row['folder_path'] or 'not known'}")
     say(f"  Added to the library: {row['added_at']}")
     say(f"  Tags: {', '.join(row['tags']) or 'none'}")
+    say()
+    say(f"Notes ({len(notes)}):")
+    _say_notes(notes, "  ")
     say()
     say(f"Tokens ({len(tokens)}):")
     for token in tokens:
@@ -341,6 +401,97 @@ def action_where(args: argparse.Namespace) -> int:
     return EXIT_VERIFIED
 
 
+# note, notes, register ---------------------------------------------------------------------------
+
+
+def _say_notes(notes: List[Dict[str, Any]], indent: str) -> None:
+    """Each note's heading, then its lines below it, so no line of a note can pass for a line of output."""
+    for note in notes:
+        say(f"{indent}{seal_register.note_heading(note)}")
+        for line in seal_register.note_lines(note):
+            say(f"{indent}    {line}".rstrip())
+
+
+def action_note(args: argparse.Namespace) -> int:
+    if args.withdraw is None:
+        if args.reason is not None:
+            raise UsageError("--reason goes with --withdraw. To add a note, give its text alone")
+        if args.text is None:
+            raise UsageError("give the note's text, or --withdraw NOTE_NUMBER --reason TEXT to withdraw a note")
+        lib.check_note_text(args.text)
+    else:
+        if args.text is not None:
+            raise UsageError("give either a note's text or --withdraw, not both. A withdrawn note keeps its text")
+        if args.reason is None:
+            raise UsageError("--withdraw needs --reason TEXT, saying why the note is withdrawn")
+        lib.check_note_text(args.reason, "the reason")
+    with _existing() as found:
+        library = _required(found, args.id)
+        sha = library.resolve(args.id)
+        if args.withdraw is None:
+            number = library.add_note(sha, args.text)
+        else:
+            number = library.withdraw_note(sha, args.withdraw, args.reason)
+    short = lib.short_id(sha)
+    if args.withdraw is None:
+        say(f"Added note {number} to seal {short}.")
+        say(f"A note is never changed. To withdraw it: library note {short} --withdraw {number} --reason TEXT")
+    else:
+        say(f"Withdrew note {args.withdraw} of seal {short}, with the reason as note {number}.")
+        say("Its text is kept and marked withdrawn. library notes shows both.")
+    return EXIT_VERIFIED
+
+
+def action_notes(args: argparse.Namespace) -> int:
+    with _existing() as found:
+        library = _required(found, args.id)
+        sha = library.resolve(args.id)
+        notes = library.notes(sha)
+    if args.json:
+        _print_json({"schema_version": JSON_SCHEMA_VERSION, "id": lib.short_id(sha), "manifest_sha256": sha, "notes": notes})
+        return EXIT_VERIFIED
+    if not notes:
+        say(f"Seal {lib.short_id(sha)} has no notes. Add one with: library note {lib.short_id(sha)} TEXT")
+        return EXIT_VERIFIED
+    say(f"Notes on seal {sha}, oldest first:")
+    _say_notes(notes, "  ")
+    withdrawn = sum(1 for note in notes if note["withdrawn_by"] is not None)
+    say(f"{count_of(len(notes), 'note')}, {withdrawn} of them withdrawn.")
+    return EXIT_VERIFIED
+
+
+def _register_target(text: Optional[str], found: Optional[Library]) -> Optional[Path]:
+    """Where the register goes. Never into the library, and never over a manifest or token it knows."""
+    target = out_path(text)
+    if target is None:
+        return None
+    if _inside(target, lib.library_root()):
+        raise UsageError(f"the register would be written inside the library folder {lib.library_root()}. Choose another --out")
+    if found is not None:
+        protected: List[Path] = []
+        for row in found.seals():
+            if row["manifest_path"]:
+                protected.append(Path(row["manifest_path"]))
+            protected.extend(Path(token["token_path"]) for token in found.tokens(row["manifest_sha256"]) if token["token_path"])
+        sealing.refuse_to_replace(target, protected, "the register")
+    return target
+
+
+def action_register(args: argparse.Namespace) -> int:
+    if args.since is not None and args.until is not None and args.since > args.until:
+        raise UsageError(f"--since {args.since} is after --until {args.until}, so no seal could match")
+    tag = lib.check_tag(args.tag) if args.tag is not None else None
+    with _existing() as found:
+        target = _register_target(args.out, found)
+        made = seal_register.build_register(found, tag, args.folder, args.since, args.until)
+    data = seal_register.render_register(made, args.format)
+    warn(seal_register.NOT_PROOF)
+    deliver(data, target, args.force, args.format in seal_register.BINARY_FORMATS)
+    if target is not None:
+        say(f"Wrote the register of {count_of(len(made.seals), 'seal')} to {target}")
+    return EXIT_VERIFIED
+
+
 # tag, untag, forget, check ------------------------------------------------------------------------
 
 
@@ -374,6 +525,8 @@ def action_forget(args: argparse.Namespace) -> int:
         library = _required(found, args.id)
         sha = library.resolve(args.id)
         row = library.seal(sha)
+        notes = len(library.notes(sha))
+        losing = f" Its {count_of(notes, 'note')} will go too." if notes else ""
         if not args.yes:
             try:
                 at_terminal = sys.stdin is not None and sys.stdin.isatty()
@@ -381,12 +534,16 @@ def action_forget(args: argparse.Namespace) -> int:
                 at_terminal = False
             if not at_terminal:
                 raise UsageError("forget asks before it removes a seal, and this is not a terminal. Add --yes to go ahead")
-            question = f"Forget seal {lib.short_id(sha)} ({_cut(row['purpose'], 60)})? Your own files are not touched. [y/N] "
+            question = (
+                f"Forget seal {lib.short_id(sha)} ({_cut(row['purpose'], 60)})?{losing} Your own files are not touched. [y/N] "
+            )
             if not _confirmed(question):
                 say("Nothing was forgotten.")
                 return EXIT_FAILED
         dropped = library.forget(sha)
     say(f"Forgot seal {lib.short_id(sha)}, and removed {_copies(dropped)} that nothing else in the library uses.")
+    if notes:
+        say(f"Its {count_of(notes, 'note')} went with it.")
     say("Your manifest, tokens and folder were not touched.")
     return EXIT_VERIFIED
 
@@ -785,6 +942,9 @@ ACTIONS: Dict[str, Callable[[argparse.Namespace], int]] = {
     "forget": action_forget,
     "tag": action_tag,
     "untag": action_tag,
+    "note": action_note,
+    "notes": action_notes,
+    "register": action_register,
     "log": action_log,
     "where": action_where,
 }

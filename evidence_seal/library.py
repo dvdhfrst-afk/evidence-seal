@@ -2,8 +2,8 @@
 
 What it keeps, under ``<home>/library/``:
 
-- ``index.sqlite3``: an SQLite index of seals, their tokens, verification runs, tags and a journal of
-  events. Its schema version is ``PRAGMA user_version``, and ``migrate`` upgrades it.
+- ``index.sqlite3``: an SQLite index of seals, their tokens, verification runs, tags, notes and a
+  journal of events. Its schema version is ``PRAGMA user_version``, and ``migrate`` upgrades it.
 - ``objects/``: a copy of every manifest, token, request and root certificate the library has seen,
   named by the SHA-256 of its bytes, written atomically and checked against that hash on every read.
 
@@ -16,6 +16,9 @@ Other parts of evidence-seal use it through:
   ``record_verification`` and turns any library problem into one warning line on standard error, so
   the command's result, output and exit code never change.
 - ``open_library(create)`` and the ``Library`` methods, for reading and changing what is recorded.
+  Notes are append-only: ``add_note``, ``withdraw_note`` and ``notes``, with ``check_note_text``.
+  ``last_change`` is the time of the newest thing recorded.
+- ``matching(rows, folder, tag)``: the seals from ``Library.seals`` that a --folder and a --tag choose.
 """
 
 from __future__ import annotations
@@ -49,7 +52,7 @@ REQUEST = "request"
 ROOT = "root"
 _MB = 1024 * 1024
 OBJECT_LIMITS = {MANIFEST: 256 * _MB, TOKEN: tsp.MAX_TOKEN_BYTES, REQUEST: _MB, ROOT: _MB}
-EVENT_KINDS = ("sealed", "stamped", "verified", "imported", "tagged", "untagged", "forgotten")
+EVENT_KINDS = ("sealed", "stamped", "verified", "imported", "tagged", "untagged", "noted", "withdrew", "forgotten")
 
 MIN_ID_DIGITS = 6
 SHORT_ID_DIGITS = 12
@@ -59,6 +62,9 @@ MAX_PATH_LENGTH = 32768
 MAX_LIST_ROWS = 100000
 MAX_LOG_LIMIT = 10000
 MAX_PROBLEMS = 1000
+MAX_NOTE_LENGTH = 4000
+MAX_NOTES = 1000  # Entries on one seal, withdrawals included
+APPEND_ONLY_TRIGGER = "notes_are_append_only"
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _HEX = re.compile(r"^[0-9a-f]{1,64}$")
 _TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -161,6 +167,18 @@ _SCHEMA_1 = (
         detail TEXT NOT NULL,
         tool_version TEXT NOT NULL
     )""",
+    # A note is never changed. A withdrawal is a note of its own that names the note it withdraws.
+    """CREATE TABLE notes (
+        manifest_sha256 TEXT NOT NULL REFERENCES seals (manifest_sha256) ON DELETE CASCADE,
+        number INTEGER NOT NULL CHECK (number >= 1),
+        at TEXT NOT NULL,
+        tool_version TEXT NOT NULL,
+        text TEXT NOT NULL,
+        withdraws INTEGER CHECK (withdraws IS NULL OR (withdraws >= 1 AND withdraws < number)),
+        PRIMARY KEY (manifest_sha256, number)
+    )""",
+    f"""CREATE TRIGGER {APPEND_ONLY_TRIGGER} BEFORE UPDATE ON notes
+        BEGIN SELECT RAISE(ABORT, 'a note is never changed; withdraw it with a new note instead'); END""",
     "CREATE INDEX runs_by_seal ON runs (manifest_sha256, id)",
     "CREATE INDEX events_by_seal ON events (manifest_sha256, id)",
     "CREATE INDEX tokens_by_object ON tokens (token_sha256)",
@@ -450,6 +468,40 @@ def check_tag(tag: str) -> str:
     if not cleaned or len(cleaned) > MAX_TAG_LENGTH or printable(cleaned) != cleaned:
         raise UsageError(f"a tag must be 1 to {MAX_TAG_LENGTH} printable characters, and {tag!r} is not")
     return cleaned
+
+
+def check_note_text(text: str, what: str = "a note") -> str:
+    """Note text as kept: Windows line ends become line feeds, and anything that could act on a screen is refused."""
+    cleaned = str(text).replace("\r\n", "\n")
+    if not cleaned.strip():
+        raise UsageError(f"{what} needs some text")
+    if len(cleaned) > MAX_NOTE_LENGTH:
+        raise UsageError(f"{what} can be at most {MAX_NOTE_LENGTH} characters, and this one has {len(cleaned)}")
+    for char in cleaned:
+        if char != "\n" and printable(char) != char:
+            raise UsageError(
+                f"{what} cannot hold control or formatting characters, and this one holds {printable(char)}."
+                " Line breaks are fine. Nothing was changed"
+            )
+    return cleaned
+
+
+def _note_text_is_sound(text: Any) -> bool:
+    try:
+        return isinstance(text, str) and check_note_text(text) == text
+    except UsageError:
+        return False
+
+
+def matching(rows: List[Dict[str, Any]], folder: Optional[Path] = None, tag: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The seals whose folder was last seen at ``folder`` and that have ``tag``, each only when given."""
+    if folder is not None:
+        wanted = sealing.path_key(folder)
+        rows = [row for row in rows if row["folder_path"] and sealing.path_key(Path(row["folder_path"])) == wanted]
+    if tag is not None:
+        tag = check_tag(tag)
+        rows = [row for row in rows if tag in row["tags"]]
+    return rows
 
 
 # The library --------------------------------------------------------------------------------------
@@ -836,6 +888,74 @@ class Library:
                 self._event("untagged", sha, f"removed the tag {tag}")
         return bool(cursor.rowcount)
 
+    # Notes, which are only ever added
+
+    def notes(self, sha: str) -> List[Dict[str, Any]]:
+        """Every note on a seal, oldest first, each with ``withdrawn_by``: the number of the note that withdrew it."""
+        rows = [
+            dict(row)
+            for row in self._all(
+                "SELECT number, at, tool_version, text, withdraws FROM notes WHERE manifest_sha256 = ? ORDER BY number",
+                (sha,),
+            )
+        ]
+        withdrawn: Dict[Any, int] = {}
+        for row in rows:
+            if row["withdraws"] is not None:
+                withdrawn.setdefault(row["withdraws"], row["number"])
+        for row in rows:
+            row["withdrawn_by"] = withdrawn.get(row["number"]) if row["withdraws"] is None else None
+        return rows
+
+    def _next_note(self, sha: str) -> int:
+        if self._one("SELECT 1 FROM seals WHERE manifest_sha256 = ?", (sha,)) is None:
+            raise LibraryError("this seal is not in the library, so it cannot have a note")
+        count, highest = self._one("SELECT count(*), max(number) FROM notes WHERE manifest_sha256 = ?", (sha,))
+        if count >= MAX_NOTES:
+            raise UsageError(f"seal {short_id(sha)} already has {MAX_NOTES} notes, as many as one seal can hold. Nothing was changed")
+        return int(highest or 0) + 1
+
+    def _insert_note(self, sha: str, number: int, text: str, withdraws: Optional[int]) -> None:
+        self._run(
+            "INSERT INTO notes (manifest_sha256, number, at, tool_version, text, withdraws) VALUES (?, ?, ?, ?, ?, ?)",
+            (sha, number, now_text(), __version__, text, withdraws),
+        )
+
+    def add_note(self, sha: str, text: str) -> int:
+        """Adds a note to a seal. Returns its number: 1 for the first, and one more for each after it."""
+        text = check_note_text(text)
+        with self.transaction():
+            number = self._next_note(sha)
+            self._insert_note(sha, number, text, None)
+            self._event("noted", sha, f"note {number}: {text}")
+        return number
+
+    def withdraw_note(self, sha: str, number: int, reason: str) -> int:
+        """Marks a note withdrawn by adding a note that names it and gives the reason. Returns the new note's number."""
+        reason = check_note_text(reason, "the reason")
+        with self.transaction():
+            row = self._one("SELECT withdraws FROM notes WHERE manifest_sha256 = ? AND number = ?", (sha, number))
+            if row is None:
+                raise UsageError(f"seal {short_id(sha)} has no note {number}. library notes lists its notes")
+            if row[0] is not None:
+                raise UsageError(f"note {number} is itself the withdrawal of note {row[0]}, and cannot be withdrawn")
+            earlier = self._one("SELECT number FROM notes WHERE manifest_sha256 = ? AND withdraws = ?", (sha, number))
+            if earlier is not None:
+                raise UsageError(f"note {number} was already withdrawn, by note {earlier[0]}. Nothing was changed")
+            new = self._next_note(sha)
+            self._insert_note(sha, new, reason, number)
+            self._event("withdrew", sha, f"note {new} withdraws note {number}: {reason}")
+        return new
+
+    def last_change(self) -> Optional[str]:
+        """The time of the newest thing recorded, so a document made from the library can say how current it is."""
+        row = self._one(
+            "SELECT max(moment) FROM (SELECT max(at) AS moment FROM events UNION ALL SELECT max(added_at) FROM seals"
+            " UNION ALL SELECT max(added_at) FROM tokens UNION ALL SELECT max(run_at) FROM runs"
+            " UNION ALL SELECT max(at) FROM notes)"
+        )
+        return None if row is None or row[0] is None else str(row[0])
+
     def _referenced(self) -> Set[str]:
         rows = self._all(
             "SELECT manifest_sha256 FROM seals UNION SELECT token_sha256 FROM tokens"
@@ -855,6 +975,7 @@ class Library:
             self._run("DELETE FROM tokens WHERE manifest_sha256 = ?", (sha,))
             self._run("DELETE FROM runs WHERE manifest_sha256 = ?", (sha,))
             self._run("DELETE FROM tags WHERE manifest_sha256 = ?", (sha,))
+            self._run("DELETE FROM notes WHERE manifest_sha256 = ?", (sha,))
             self._run("DELETE FROM events WHERE manifest_sha256 = ?", (sha,))
             self._run("DELETE FROM seals WHERE manifest_sha256 = ?", (sha,))
             dropped = sorted(used - self._referenced())
@@ -906,8 +1027,47 @@ class Library:
             problems.append(f"a seal or token refers to the copy {short_id(sha)}, which is not in the object list")
         for sha in sorted(set(objects) - referenced):
             problems.append(f"the {objects[sha][0]} copy {short_id(sha)} is not used by any seal (orphaned)")
+        problems.extend(self._note_problems())
         problems.extend(self._stray_files(set(objects)))
         return problems[:MAX_PROBLEMS]
+
+    def _note_problems(self) -> List[str]:
+        """Notes are numbered 1, 2, 3 on each seal and never removed, so a gap means the index was edited outside evidence-seal."""
+        problems: List[str] = []
+        trigger = self._one("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?", (APPEND_ONLY_TRIGGER,))
+        if trigger is None:
+            problems.append(f"the index no longer refuses changes to notes: its {APPEND_ONLY_TRIGGER} rule is gone")
+        current: Any = None
+        expected = 1
+        kinds: Dict[Any, str] = {}
+        withdrawn: Set[Any] = set()
+        for sha, number, text, withdraws in self._all(
+            "SELECT manifest_sha256, number, text, withdraws FROM notes ORDER BY manifest_sha256, number"
+        ):
+            if sha != current:
+                current, expected, kinds, withdrawn = sha, 1, {}, set()
+            seal = f"seal {short_id(printable(sha))}"
+            if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+                problems.append(f"{seal}: a note is numbered {printable(repr(number))}, which is not a note number")
+                continue
+            if number > expected:
+                gap = f"note {expected} is" if number == expected + 1 else f"notes {expected} to {number - 1} are"
+                problems.append(f"{seal}: {gap} missing. Notes are never removed, so the index was changed outside evidence-seal")
+            expected = number + 1
+            if not _note_text_is_sound(text):
+                problems.append(f"{seal}, note {number}: its text is not something a note can hold")
+            if withdraws is None:
+                kinds[number] = "note"
+                continue
+            kinds[number] = "withdrawal"
+            if kinds.get(withdraws) != "note":
+                problems.append(f"{seal}, note {number}: it withdraws note {printable(withdraws)}, which is not an earlier note")
+            elif withdraws in withdrawn:
+                problems.append(f"{seal}, note {number}: it withdraws note {withdraws}, which was already withdrawn")
+            withdrawn.add(withdraws)
+            if len(problems) >= MAX_PROBLEMS:
+                break
+        return problems
 
     def _stray_files(self, known: Set[str]) -> List[str]:
         stray: List[str] = []
