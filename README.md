@@ -277,6 +277,11 @@ the output lists them.
 writes one page of text, or with `--format` HTML, JSON, Markdown, CSV, JUnit XML or PDF.
 `--out -` prints it instead. [docs/REPORTS.md](docs/REPORTS.md) describes each format.
 
+**`serve`** opens a web interface and JSON API to the seal library, on this computer only: browse,
+verify, seal, stamp, check files you were given, and compare. It listens on a loopback address and
+prints an address carrying a fresh access key. [docs/WEB.md](docs/WEB.md) describes the pages, the
+API and the security model.
+
 ## Moving a seal to another computer
 
 Copy the folder, the manifest and at least the `.tsr`. A manifest made on Windows has the same bytes as
@@ -477,11 +482,12 @@ repeat run put the time in reading files. The cause of the slow first read was n
 |---|---|
 | `evidence_seal/cli.py` | Arguments, exit codes and plain error messages |
 | `evidence_seal/sealing.py`, `scan.py`, `manifest.py` | The seal command, safe file writing, walking and hashing, and manifest formats |
-| `evidence_seal/stamping.py` | The stamp command, and the only network code |
+| `evidence_seal/stamping.py` | The stamp command, and the only outgoing network code |
 | `evidence_seal/verification.py`, `tokencheck.py`, `results.py` | The verify flow, each token check, and verdicts |
 | `evidence_seal/showing.py`, `render.py`, `reporting.py`, `text.py` | Text, HTML and JSON output, the `openssl` commands, and safe display |
 | `evidence_seal/report_formats.py`, `pdf.py` | The table of report formats, the formats beyond text and HTML, and a small PDF writer |
 | `evidence_seal/exporting.py`, `comparing.py` | The export and diff commands |
+| `evidence_seal/web/` | The serve command: a loopback-only web interface and JSON API |
 | `evidence_seal/der.py`, `tsp.py`, `cms.py`, `x509.py` | Binary formats |
 | `evidence_seal/rsa.py`, `ecdsa.py`, `signatures.py`, `hashes.py`, `oids.py` | Cryptographic checks and names |
 | `evidence_seal/chain.py`, `trust.py`, `openssl_bridge.py` | Certificate paths, trusted roots, and calling `openssl` |

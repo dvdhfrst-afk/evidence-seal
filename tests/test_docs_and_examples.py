@@ -24,6 +24,7 @@ DOCUMENTS = [
     "docs/REPORTS.md",
     "docs/CI.md",
     "docs/AUTHORITIES.md",
+    "docs/WEB.md",
     "examples/README.md",
 ]
 
