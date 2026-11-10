@@ -134,6 +134,7 @@ def seal_detail(sha: str) -> Dict[str, Any]:
             "tokens": found.tokens(sha),
             "runs": found.runs(sha, MAX_RUNS),
             "events": found.events(sha, MAX_EVENTS),
+            "notes": found.notes(sha),
             "manifest": manifest_of(found, sha),
         }
 
@@ -162,6 +163,14 @@ def change_tag(sha: str, tag: str, add: bool) -> bool:
         seal_row(found, sha)
         assert found is not None
         return found.tag(sha, tag) if add else found.untag(sha, tag)
+
+
+def add_note(sha: str, text: str) -> int:
+    """Adds a note, as library note does. Returns its number."""
+    with existing_library() as found:
+        seal_row(found, sha)
+        assert found is not None
+        return found.add_note(sha, text)
 
 
 def forget(sha: str) -> int:

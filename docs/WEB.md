@@ -80,7 +80,7 @@ What it does not protect against:
 | Page | What it does |
 |---|---|
 | `/` Seals | Every seal in the library, newest first, with its last result and date. Search words, a tag and part of a folder path filter it; 50 a page. |
-| `/seals/ID` | One seal: its header, tokens, verification history, events, tags and file list (100 a page). Buttons verify it, stamp it, add or remove a tag, compare it, and forget it. The file list downloads in every export format. |
+| `/seals/ID` | One seal: its header, tokens, verification history, events, tags, notes and file list (100 a page). Buttons verify it, stamp it, add or remove a tag, add a note, compare it, and forget it. Notes cannot be edited here or anywhere; `library note --withdraw` withdraws one and keeps both. The file list downloads in every export format. |
 | `/seals/ID/forget` | Asks for confirmation before the seal is forgotten. Your files are never touched. |
 | `/new` New seal | A dry-run preview first (what would be sealed, by which pattern something would not be, and any problem), then sealing as a job. The seal's page then offers stamping. |
 | `/check` Check files I was given | Upload a manifest, its token and optionally the authority's root. Without a folder only the token is checked, and the result cannot be VERIFIED. With a folder path the files are checked too. An uploaded root is trusted for that run only. Nothing is recorded in the library. |
@@ -122,7 +122,7 @@ In JSON, `true` and `false` stand for yes and no, and a list of text gives sever
 | `GET /health` | Is it up, and which versions. |
 | `GET /formats` | The format names for reports, exports and diffs. |
 | `GET /seals?q=&tag=&folder=&page=` | The seals, filtered, 50 a page, with `total`, `pages` and every tag. |
-| `GET /seals/ID` | One seal with its tokens, runs, events and file counts. ID is the full manifest SHA-256. |
+| `GET /seals/ID` | One seal with its tokens, runs, events, notes and file counts. ID is the full manifest SHA-256. |
 | `GET /seals/ID/files?page=` | Its file list, 100 a page. |
 | `GET /seals/ID/export/FORMAT` | The file list in an export format: `sha256sum`, `bsd`, `csv` or `json`. |
 | `GET /seals/ID/report/FORMAT` | The report of its newest verification in this run, or 409. |
@@ -130,6 +130,7 @@ In JSON, `true` and `false` stand for yes and no, and a list of text gives sever
 | `POST /seals/ID/stamp` | Starts a stamp. `authority` names one from the list; optional `profile`. Uses the network. |
 | `POST /seals/ID/tags` | Adds `tag`. |
 | `POST /seals/ID/untag` | Removes `tag`. |
+| `POST /seals/ID/notes` | Adds a note with `text`, as `library note` does, and answers its `note` number. `GET /seals/ID` lists the notes. |
 | `POST /seals/ID/forget` | Forgets the seal. Needs `confirm` set to true. |
 | `POST /seal` | Seals `folder` with `purpose`, optional `exclude` (a list), `out` and `profile`. With `dry_run` true it answers the preview instead. |
 | `GET /jobs` | This run's jobs, newest first. |

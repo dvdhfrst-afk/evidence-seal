@@ -41,6 +41,13 @@ class Api(WebTestCase):
         files = self.api("GET", f"/seals/{self.sha}/files", status=200).json()
         self.assertEqual([item["path"] for item in files["files"]], ["a.txt", "sub/b.bin"])
 
+    def test_notes(self):
+        self.assertEqual(self.api("GET", f"/seals/{self.sha}", status=200).json()["notes"], [])
+        self.assertEqual(self.api("POST", f"/seals/{self.sha}/notes", {"text": "first"}, status=200).json()["note"], 1)
+        notes = self.api("GET", f"/seals/{self.sha}", status=200).json()["notes"]
+        self.assertEqual([(note["number"], note["text"]) for note in notes], [(1, "first")])
+        self.api("POST", f"/seals/{self.sha}/notes", {"text": ""}, status=400)
+
     def test_tags_and_forget(self):
         self.assertEqual(self.api("POST", f"/seals/{self.sha}/tags", {"tag": "court"}, status=200).json()["added"], True)
         self.assertEqual(self.api("GET", "/seals?tag=court", status=200).json()["total"], 1)

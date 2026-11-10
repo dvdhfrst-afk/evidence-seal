@@ -62,6 +62,7 @@ def seal(request: Request) -> Response:
             "tokens": detail["tokens"],
             "runs": detail["runs"],
             "events": detail["events"],
+            "notes": detail["notes"],
             "files": {"count": len(data.entries), "by_name_only": len(data.links) + len(data.special)},
         }
     )
@@ -98,6 +99,12 @@ def seal_tag(request: Request) -> Response:
     added = request.path.endswith("/tags")
     changed = actions.change_tag(sha, tag, added)
     return json_response({"schema_version": JSON_SCHEMA_VERSION, "tag": tag, "added" if added else "removed": changed})
+
+
+def seal_note(request: Request) -> Response:
+    sha = _seal_param(request)
+    number = actions.add_note(sha, request.fields.text("text", required=True, label="note text") or "")
+    return json_response({"schema_version": JSON_SCHEMA_VERSION, "note": number})
 
 
 def seal_forget(request: Request) -> Response:
@@ -199,6 +206,7 @@ def register(router: Router) -> None:
     router.add("POST", f"{PREFIX}/seals/{{sha}}/stamp", seal_stamp)
     router.add("POST", f"{PREFIX}/seals/{{sha}}/tags", seal_tag)
     router.add("POST", f"{PREFIX}/seals/{{sha}}/untag", seal_tag)
+    router.add("POST", f"{PREFIX}/seals/{{sha}}/notes", seal_note)
     router.add("POST", f"{PREFIX}/seals/{{sha}}/forget", seal_forget)
     router.add("POST", f"{PREFIX}/seal", new_seal)
     router.add("GET", f"{PREFIX}/jobs", jobs)

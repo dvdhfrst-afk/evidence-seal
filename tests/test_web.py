@@ -88,6 +88,20 @@ class Pages(WebTestCase):
         answer = self.post(f"/seals/{sha}/tags", {"tag": "bad\nline"}, status=400)
         self.assertIn("tag", answer.text)
 
+    def test_notes_are_shown_and_added(self):
+        _, _, sha = self.sealed()
+        self.assertIn("No notes yet.", self.get(f"/seals/{sha}").text)
+        answer = self.post(f"/seals/{sha}/notes", {"text": "Handed to <b>the reviewer</b>\r\nsecond line"}, status=303)
+        self.assertEqual(answer.headers["location"], f"/seals/{sha}")
+        page = self.get(f"/seals/{sha}").text
+        self.assertIn("Notes (1)", page)
+        self.assertIn("Handed to &lt;b&gt;the reviewer&lt;/b&gt;<br>second line", page)
+        self.assertNotIn("<b>the reviewer</b>", page)
+        with self.open() as opened:
+            self.assertEqual(opened.notes(sha)[0]["text"], "Handed to <b>the reviewer</b>\nsecond line")
+        self.assertIn("note", self.post(f"/seals/{sha}/notes", {"text": "bell\x07"}, status=400).text)
+        self.post(f"/seals/{sha}/notes", {}, status=400)
+
     def test_forget_needs_a_confirmation(self):
         _, _, sha = self.sealed()
         page = self.get(f"/seals/{sha}/forget").text

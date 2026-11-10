@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .. import comparing, exporting, report_formats
+from .. import comparing, exporting, report_formats, seal_register
 from .. import library as lib
 from ..authority_commands import TEST_ONLY
 from ..console import size_text
@@ -219,6 +219,27 @@ def _tag_section(request: Request, sha: str, tags: List[str]) -> str:
     return "".join(parts)
 
 
+def _notes_section(request: Request, sha: str, notes: List[Dict[str, Any]]) -> str:
+    parts = [f"<h2>Notes ({len(notes)})</h2>"]
+    if notes:
+        rows = [
+            (e(seal_register.note_heading(note)), "<br>".join(e(line) for line in seal_register.note_lines(note)))
+            for note in notes
+        ]
+        parts.append(m.table(("Note", "Text"), rows))
+    else:
+        parts.append(m.paragraph("No notes yet."))
+    parts.append(
+        m.paragraph(
+            "Notes are kept as written and cannot be edited. To withdraw one, run"
+            f" library note {lib.short_id(sha)} --withdraw NUMBER --reason TEXT, which keeps both."
+        )
+    )
+    field = m.text_box("text", "New note", "", f"up to {lib.MAX_NOTE_LENGTH} characters; line breaks are kept")
+    parts.append(m.form(f"/seals/{sha}/notes", request.form_token, field, "Add the note"))
+    return "".join(parts)
+
+
 def _files_section(sha: str, data: Any, page: int) -> str:
     rows, pages = actions.page_of(actions.file_rows(data), page, actions.FILES_PER_PAGE)
     exports = " ".join(m.link(f"/seals/{sha}/export/{name}", name) for name in exporting.EXPORT_FORMATS)
@@ -276,6 +297,7 @@ def seal_page(request: Request) -> Response:
         + _verify_section(request, sha, row)
         + _stamp_section(request, sha, row, detail["tokens"])
         + _tag_section(request, sha, row["tags"])
+        + _notes_section(request, sha, detail["notes"])
         + _files_section(sha, detail["manifest"], page)
         + _history_sections(detail["tokens"], detail["runs"], detail["events"])
     )
@@ -296,6 +318,12 @@ def seal_tag(request: Request) -> Response:
     sha = request.params["sha"]
     tag = request.fields.text("tag", required=True, label="tag") or ""
     actions.change_tag(sha, tag, request.path.endswith("/tags"))
+    return redirect(f"/seals/{sha}")
+
+
+def seal_note(request: Request) -> Response:
+    sha = request.params["sha"]
+    actions.add_note(sha, request.fields.text("text", required=True, label="note text") or "")
     return redirect(f"/seals/{sha}")
 
 
@@ -709,6 +737,7 @@ def register(router: Router) -> None:
     router.add("POST", "/seals/{sha}/stamp", seal_stamp)
     router.add("POST", "/seals/{sha}/tags", seal_tag)
     router.add("POST", "/seals/{sha}/untag", seal_tag)
+    router.add("POST", "/seals/{sha}/notes", seal_note)
     router.add("GET", "/seals/{sha}/forget", seal_forget_page)
     router.add("POST", "/seals/{sha}/forget", seal_forget)
     router.add("GET", "/seals/{sha}/report/{format}", seal_report)
