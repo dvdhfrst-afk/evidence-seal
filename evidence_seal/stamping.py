@@ -75,7 +75,8 @@ def _open_url(request: urllib.request.Request, timeout: float):
     return urllib.request.build_opener(_NoRedirects()).open(request, timeout=timeout)
 
 
-def _check_url(url: str) -> None:
+def check_url(url: str) -> None:
+    """Refuses an authority address that is not a plain http or https URL."""
     try:
         parts = urllib.parse.urlsplit(url)
         host = parts.hostname
@@ -160,7 +161,7 @@ def _one_request(url: str, body: bytes, timeout: float) -> bytes:
 
 def post_request(url: str, body: bytes, timeout: float) -> bytes:
     """POSTs one timestamp request and returns the raw response body, within ``timeout`` seconds in all."""
-    _check_url(url)
+    check_url(url)
     outcome: List[object] = []
 
     def work() -> None:
@@ -248,7 +249,9 @@ def stamp_manifest(
         raise StampError(f"{token_path} already exists; use --force to replace it, or choose another name with --out")
     sealing.check_can_write(token_path)
     if policy is not None:
-        policy = _checked_policy(policy)
+        problem = policy_problem(policy)
+        if problem is not None:
+            raise UsageError(f"--policy {problem}")
 
     nonce = secrets.randbits(63) | (1 << 62)
     request = tsp.build_request(algorithm, algorithm.digest(manifest_bytes), nonce=nonce, cert_req=True, policy=policy)
@@ -292,10 +295,11 @@ def _keep_copy(path: Path, new_bytes: bytes, kept: List[Path]) -> None:
         kept.append(copy)
 
 
-def _checked_policy(policy: str) -> str:
+def policy_problem(policy: str) -> Optional[str]:
+    """Why this is not a policy object identifier, or None when it is one."""
     parts = policy.split(".")
     if len(parts) < 2 or not all(part.isascii() and part.isdigit() for part in parts):
-        raise UsageError(f"--policy must be an object identifier such as 1.2.3.4, not {policy!r}")
+        return f"must be an object identifier such as 1.2.3.4, not {policy!r}"
     if int(parts[0]) > 2 or (int(parts[0]) < 2 and int(parts[1]) >= 40):
-        raise UsageError(f"--policy must be a valid object identifier, and {policy!r} is not")
-    return policy
+        return f"must be a valid object identifier, and {policy!r} is not"
+    return None

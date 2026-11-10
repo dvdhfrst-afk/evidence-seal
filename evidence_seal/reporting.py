@@ -32,6 +32,8 @@ DEPENDS_ON = (
     "The continued strength of SHA-256 and of the signature algorithm.",
     "This is a technical summary and not legal advice. Whether it is admissible or persuasive is for a lawyer to judge.",
 )
+# The formats the report command writes. The first is the default.
+REPORT_FORMATS: Tuple[str, ...] = ("text", "html")
 # Safe bare in sh, cmd.exe and PowerShell alike. A backslash only counts as plain where it separates folders.
 _PLAIN_ARGUMENT = re.compile(r"^[A-Za-z0-9_./:=+\\-]+$" if os.name == "nt" else r"^[A-Za-z0-9_./:=+-]+$")
 # Safe inside double quotes in all three. Letters and digits of any script, plus a few marks.

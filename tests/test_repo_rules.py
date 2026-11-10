@@ -24,7 +24,7 @@ TEXT_SUFFIXES = {".py", ".md", ".toml", ".sh"}
 SOURCE_DIRS = ("evidence_seal", "tests", "docs", "examples")
 ALLOWED_IMPORTS = {
     "argparse", "ast", "atexit", "base64", "binascii", "collections", "configparser", "contextlib", "csv",
-    "dataclasses", "datetime", "enum", "errno", "fnmatch", "functools", "glob", "hashlib", "hmac", "html",
+    "dataclasses", "datetime", "difflib", "enum", "errno", "fnmatch", "functools", "glob", "hashlib", "hmac", "html",
     "http", "importlib", "io", "itertools", "json", "math", "mimetypes", "os", "pathlib", "random", "re",
     "secrets", "shlex", "shutil", "signal", "socket", "socketserver", "sqlite3", "ssl", "stat", "string",
     "struct", "subprocess", "sys", "tempfile", "textwrap", "threading", "time", "traceback", "typing",
