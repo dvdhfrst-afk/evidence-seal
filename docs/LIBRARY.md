@@ -217,11 +217,11 @@ itself be withdrawn: add a new note instead.
 
 ```text
 Notes on seal 5ea307...:
-  Note 1, 2026-11-09T09:14:02Z, evidence-seal 1.0.0
+  Note 1, 2026-11-10T09:14:02Z, evidence-seal 1.1.0
       Received from Example Org on a USB drive, sealed on arrival.
-  Note 2, 2026-11-09T09:20:45Z, evidence-seal 1.0.0, WITHDRAWN by note 3
+  Note 2, 2026-11-10T09:20:45Z, evidence-seal 1.1.0, WITHDRAWN by note 3
       Copy sent to the review desk.
-  Note 3, 2026-11-09T10:02:11Z, evidence-seal 1.0.0, withdrawing note 2
+  Note 3, 2026-11-10T10:02:11Z, evidence-seal 1.1.0, withdrawing note 2
       Entered on the wrong seal, see note 3 of 1f9c02.
 ```
 

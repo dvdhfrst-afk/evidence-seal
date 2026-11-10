@@ -267,9 +267,11 @@ class Registry(Seals):
                 self.assertEqual(target.read_bytes(), before)
 
     def test_text_and_html_are_byte_for_byte_what_they_were(self):
-        # Hashes of what the version before the table of formats wrote for these same fixed inputs.
+        # Hashes of what the version before the table of formats wrote for these same fixed inputs. The
+        # version number printed in a report is set to the one those hashes were made with.
         context = reporting.ReportContext("sample-manifest.txt", "sample-manifest.tsr", "root-rsa.crt")
         verified = self.outcome()
+        verified.tool_version = "1.0.0"
         expected = {
             "text": "24a9f5d62f4b73c735abe8b5d2f3aa0951472d10d194def7a67e8c3c349d2505",
             "html": "941e3020154a5c5d465ba9e8ea82078f58257437404cde7f4f20cd894ff7d9fc",
@@ -278,6 +280,7 @@ class Registry(Seals):
             self.assertEqual(hashlib.sha256(report_formats.by_name(name).render(verified, context)).hexdigest(), digest)
         (self.folder / "notes.txt").write_bytes(b"changed")
         failed = self.outcome(ca=False)
+        failed.tool_version = "1.0.0"
         # This one names where trusted roots come from, which the authority list changed, so its hash is newer.
         context = reporting.ReportContext("sample-manifest.txt", "sample-manifest.tsr", None)
         self.assertEqual(

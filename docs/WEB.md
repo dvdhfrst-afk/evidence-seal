@@ -111,7 +111,7 @@ Work that hashes files or uses the network starts a job and answers 202 with the
 
 ```text
 curl -H "Authorization: Bearer KEY" http://127.0.0.1:8765/api/v1/health
-{"status": "ok", "api_version": 1, "tool_version": "1.0.0"}
+{"status": "ok", "api_version": 1, "tool_version": "1.1.0"}
 ```
 
 POST bodies are JSON, `application/x-www-form-urlencoded`, or for `/check` multipart/form-data.

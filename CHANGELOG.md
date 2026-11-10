@@ -3,6 +3,33 @@
 Version numbers follow semantic versioning. The manifest format has its own version, described in
 [docs/FORMAT.md](docs/FORMAT.md), and it changes far less often than this tool.
 
+## 1.1.0 (2026-11-10)
+
+New:
+
+- A seal library on this computer records every seal, stamp and verify run, with copies of each
+  manifest, token, request and root. `library` lists, shows, imports earlier seals, verifies them
+  again, checks its own copies, tags, keeps append-only notes, and writes an evidence register in
+  text, CSV, JSON, Markdown, HTML or PDF. Its index has a schema version and upgrades itself after a
+  dated backup.
+- A settings file with named profiles, changed through `config` and `profile` without losing comments.
+- An authority list (`authority`), used by `stamp --authority NAME`, whose roots `verify` and
+  `report` trust.
+- `test-authority`, a local timestamp authority for trying everything offline. Its tokens are marked
+  as test tokens everywhere they are shown.
+- `report` also writes JSON, Markdown, CSV, JUnit XML and PDF.
+- `export` writes a manifest's file list for `sha256sum` and other tools, and `diff` compares two
+  manifests or a manifest and a folder.
+- `serve`, a web interface and JSON API on a loopback address, protected by a per-run access key.
+
+Changed:
+
+- All of the tool's own files live in one home folder, which `EVIDENCE_SEAL_HOME` moves.
+- `verify` and `report` trust the roots in the authority list as well as the built-in fingerprints.
+  `--ca` still means only the given files.
+
+Unchanged: the manifest format is still v1, byte for byte, and `verify --json` is still schema 1.
+
 ## 1.0.0 (2026-11-07)
 
 First version.
