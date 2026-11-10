@@ -4,8 +4,8 @@ It compares names, sizes and SHA-256 hashes, and nothing else: it checks no toke
 A file whose exact bytes turn up under a new name counts as moved. A name that differs only in its
 Unicode form is matched, as verify matches it, and a note says how many were.
 
-For other parts of the tool: ``listing_of_manifest``, ``listing_of_folder``, ``compare`` and
-``render_diff(comparison, format) -> bytes``.
+For other parts of the tool: ``listing_of_manifest``, ``listing_of_data``, ``listing_of_folder``,
+``compare`` and ``render_diff(comparison, format) -> bytes``.
 """
 
 from __future__ import annotations
@@ -78,13 +78,18 @@ class Comparison:
 
 def listing_of_manifest(path: Path, label: str, warn_about: Callable[[str], None]) -> Tuple[Listing, manifest.Manifest]:
     data = manifest.read_manifest(path)
-    entries = manifest.sha256_entries(data, path.name, "diff")
+    return listing_of_data(data, path.name, label, warn_about), data
+
+
+def listing_of_data(data: manifest.Manifest, name: str, label: str, warn_about: Callable[[str], None]) -> Listing:
+    """One side from a manifest already read. ``name`` is what the warnings call it."""
+    entries = manifest.sha256_entries(data, name, "diff")
     for problem in data.problems:
-        warn_about(f"warning: {path.name} is inconsistent: {problem}. Its entries were compared as listed")
+        warn_about(f"warning: {name} is inconsistent: {problem}. Its entries were compared as listed")
     if data.unreadable_lines:
-        warn_about(f"warning: {count_of(data.unreadable_lines, 'line')} of {path.name} could not be read as hash lines")
+        warn_about(f"warning: {count_of(data.unreadable_lines, 'line')} of {name} could not be read as hash lines")
     files = {entry.path: (entry.hexdigest, entry.size) for entry in entries}
-    return Listing(label, f"{data.kind} manifest", files, len(data.links) + len(data.special)), data
+    return Listing(label, f"{data.kind} manifest", files, len(data.links) + len(data.special))
 
 
 def listing_of_folder(

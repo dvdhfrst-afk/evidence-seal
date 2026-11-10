@@ -2,6 +2,9 @@
 
 Registered through ``cli.COMMAND_MODULES``. Storage lives in ``library.py``. These actions read the
 files a user names and write only inside the library folder, never beside the user's files.
+
+For other parts of the tool: ``verify_seal(library, sha, folder, report)`` is ``library verify`` for
+one seal, with progress sent to ``report``.
 """
 
 from __future__ import annotations
@@ -658,7 +661,15 @@ def _own_file_rules(folder: Path, paths: List[Optional[str]]) -> List[scan.Exclu
     return rules
 
 
-def _verify_one(library: Library, sha: str, folder_override: Optional[Path], ca: List[Path]) -> Checked:
+def _verify_one(
+    library: Library,
+    sha: str,
+    folder_override: Optional[Path],
+    ca: List[Path],
+    report: Optional[Callable[[scan.Meter], None]] = None,
+) -> Checked:
+    """Verifies one seal from the library's copies and records the run. Progress goes to ``report``
+    when one is given, and to the terminal otherwise."""
     row = library.seal(sha)
     token = library.current_token(sha)
     try:
@@ -670,7 +681,7 @@ def _verify_one(library: Library, sha: str, folder_override: Optional[Path], ca:
     folder_text = str(folder_override) if folder_override is not None else row["folder_path"]
     folder = Path(folder_text) if folder_text and Path(folder_text).is_dir() else None
     scratch = tempfile.mkdtemp(prefix="verify-", dir=str(library.root))
-    meter = progress("Checked")
+    meter = progress("Checked") if report is None else None
     try:
         copy = Path(scratch) / "manifest.txt"
         sealing.write_new_file(copy, manifest_bytes)
@@ -690,7 +701,7 @@ def _verify_one(library: Library, sha: str, folder_override: Optional[Path], ca:
             query_path=query_copy,
             excludes=_own_file_rules(folder, known_paths) if folder else (),
             skip_files=folder is None,
-            report=meter,
+            report=report or meter,
         )
         outcome = verification.verify(options)
     except EvidenceSealError as exc:
@@ -718,6 +729,16 @@ def _verify_one(library: Library, sha: str, folder_override: Optional[Path], ca:
         outcome.token_name = Path(token["token_path"]).name
     library.add_run(sha, token["token_sha256"] if token else None, LIBRARY_VERIFY, outcome)
     return Checked(sha, outcome, _reason(outcome))
+
+
+def verify_seal(
+    library: Library,
+    sha: str,
+    folder: Optional[Path] = None,
+    report: Optional[Callable[[scan.Meter], None]] = None,
+) -> Checked:
+    """What ``library verify`` does for one seal: the same check from the library's copies, recorded the same way."""
+    return _verify_one(library, sha, folder, [], report)
 
 
 def _worst(results: List[Checked]) -> int:
