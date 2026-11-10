@@ -582,3 +582,50 @@ class Offline(TestAuthorityCase):
         self.assertEqual(code, 0, err)
         code, out, _ = run_cli("verify", manifest, "--skip-files")
         self.assertIn("comes from local-test", out)
+
+
+class GentleClose(unittest.TestCase):
+    """A refusal sent before the body is read must reach the client, and a client that never stops
+    sending must not hold the server's thread for long."""
+
+    def pair(self):
+        server, client = socket.socketpair()
+        self.addCleanup(client.close)
+        self.addCleanup(server.close)
+        return server, client
+
+    def test_the_answer_survives_unread_bytes(self):
+        server, client = self.pair()
+        client.sendall(b"x" * 32 * 1024)
+        server.sendall(b"413 refused")
+        local_server.close_gently(server)
+        client.settimeout(5)
+        received = b""
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            received += chunk
+        self.assertEqual(received, b"413 refused")
+
+    def test_a_client_that_never_closes_is_cut_off(self):
+        server, client = self.pair()
+        client.setblocking(False)
+        started = time.monotonic()
+        with mock.patch.object(local_server, "DRAIN_SECONDS", 0.3):
+            stop = time.monotonic() + 3
+            sent = 0
+            while sent < 256 * 1024 and time.monotonic() < stop:
+                try:
+                    sent += client.send(b"y" * 4096)
+                except BlockingIOError:
+                    break
+            local_server.close_gently(server)
+        self.assertLess(time.monotonic() - started, 3.5)
+        self.assertEqual(server.fileno(), -1)
+
+    def test_a_connection_already_gone_is_closed_quietly(self):
+        server, client = self.pair()
+        client.close()
+        local_server.close_gently(server)
+        self.assertEqual(server.fileno(), -1)

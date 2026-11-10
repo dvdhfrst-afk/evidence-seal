@@ -398,6 +398,15 @@ to do that:
    [docs/AUTHORITIES.md](docs/AUTHORITIES.md), which also covers the local test authority, whose
    tokens prove nothing to anyone else.
 
+**What the signature covers.** The authority signs the timestamp information (the manifest's hash,
+the time, the policy, the serial number and the nonce) and a few signed attributes that name its own
+certificate. It does not sign the rest of the token file: the certificates the token carries, and a
+few version and status fields around the signature. A change there is caught only if a check uses
+those bytes. A changed signing certificate or intermediate breaks the chain and fails. A changed copy
+of the root, when the root you trust comes from outside the token, is never used, so the token still
+verifies here and in `openssl ts -verify` alike. To hold a token's exact bytes, record its own hash
+somewhere that is itself protected, such as a later seal of the folder holding it.
+
 Otherwise the chain check is NOT CHECKED and the overall result is INCOMPLETE, however good the
 signature is. The `.ca.crt` copy from `stamp` is only a convenience, and using it with `--ca` proves
 nothing new. A reviewer should fetch the root from the authority and compare fingerprints.
@@ -476,7 +485,7 @@ WSL 2 (Windows Subsystem for Linux). The test suite was run on 2026-11-09 with v
 after it was run on 2026-11-07 with version 1.0.0, before the library, settings, authority list, report
 formats and web interface existed. Nobody else has run these numbers yet.
 
-**The test suite.** 877 tests pass on Windows with Python 3.9.25, and on Linux with Python 3.9.25 and
+**The test suite.** 880 tests pass on Windows with Python 3.9.25, and on Linux with Python 3.9.25 and
 3.14.4 as a normal user; `check.sh` passes on both. 15 skip on Windows, each because it needs something
 Windows lacks here: POSIX (Portable Operating System Interface) signals and file modes, names Windows
 cannot hold, permission to create links, or the `qpdf` program for a second opinion on PDF files. 5 skip

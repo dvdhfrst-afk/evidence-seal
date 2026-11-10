@@ -9,7 +9,7 @@ Switches show how stamp handles trouble: refuse every request, answer busy (HTTP
 times, wait before answering, sign a fixed time, or answer bytes that are not a token.
 
 Public API: ServeOptions, loopback_host(), LocalServer (start, url, stop, requests, serve_forever;
-usable as a context manager), MAX_REQUEST_BYTES.
+usable as a context manager), MAX_REQUEST_BYTES, and close_gently(), which the web interface shares.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import ipaddress
 import os
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +29,8 @@ from .local_authority import SYSTEM_FAILURE, LocalAuthority
 
 MAX_REQUEST_BYTES = 64 * 1024
 READ_TIMEOUT = 10
+DRAIN_BYTES = 1024 * 1024
+DRAIN_SECONDS = 1.0
 BROKEN_ANSWER = b"This is not a timestamp token. The test authority was started with --broken.\n"
 PAGE = (
     "evidence-seal local test authority (TEST ONLY)\n"
@@ -138,6 +141,36 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(200, answer, "application/timestamp-reply")
 
 
+def close_gently(connection: socket.socket) -> None:
+    """Closes a connection without losing the answer just written to it.
+
+    A request refused for its size or origin is answered before its body is read. Closing a socket
+    that still holds unread bytes makes the system reset the connection, and on Windows the reset
+    can reach the client before the answer does, so the client sees an aborted connection instead of
+    the refusal. So the sending side is shut first, and whatever is still arriving is read and
+    dropped, up to DRAIN_BYTES and DRAIN_SECONDS, before the socket is closed."""
+    try:
+        connection.shutdown(socket.SHUT_WR)
+    except OSError:
+        connection.close()
+        return
+    deadline = time.monotonic() + DRAIN_SECONDS
+    drained = 0
+    try:
+        while drained < DRAIN_BYTES:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            connection.settimeout(left)
+            chunk = connection.recv(64 * 1024)
+            if not chunk:
+                break
+            drained += len(chunk)
+    except OSError:
+        pass
+    connection.close()
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     # On Windows this option would let a second server take the same port silently.
@@ -167,6 +200,9 @@ class _Server(ThreadingHTTPServer):
     def note(self, text: str) -> None:
         if self.log is not None:
             self.log(text)
+
+    def shutdown_request(self, request):
+        close_gently(request)
 
     def handle_error(self, request, client_address):
         self.note("a request could not be answered: the connection failed or this tool has a bug")

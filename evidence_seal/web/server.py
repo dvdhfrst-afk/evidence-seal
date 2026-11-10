@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional
 
 from ..errors import EvidenceSealError, UsageError
-from ..local_server import loopback_host
+from ..local_server import close_gently, loopback_host
 from ..text import printable
 from . import api, pages, security
 from .assets import ASSETS
@@ -252,7 +252,8 @@ class _Server(ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
-            self.shutdown_request(request)  # Too many connections at once: this one is closed unanswered
+            # Too many connections at once: this one is closed unanswered, without waiting on it
+            ThreadingHTTPServer.shutdown_request(self, request)
             return
         try:
             super().process_request(request, client_address)
@@ -265,6 +266,9 @@ class _Server(ThreadingHTTPServer):
             super().process_request_thread(request, client_address)
         finally:
             self.slots.release()
+
+    def shutdown_request(self, request):
+        close_gently(request)
 
     def handle_error(self, request, client_address):
         pass  # A broken connection is not worth a stack trace; every answer already handles its own errors
